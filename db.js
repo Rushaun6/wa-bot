@@ -56,7 +56,9 @@ const save = () => { if (!timer) timer = setTimeout(flush, 2000); };
 
 function user(n, name) {
   let u = data.users[n];
-  if (!u) u = data.users[n] = { wallet: 500, lastDaily: 0, streak: 0, lastWork: 0, padlock: 0, robCd: 0, name: '' };
+  if (!u) u = data.users[n] = { wallet: 500, bank: 0, lastBeg: 0, lastDaily: 0, streak: 0, lastWork: 0, padlock: 0, robCd: 0, name: '' };
+  if (u.bank == null) u.bank = 0;
+  if (u.lastBeg == null) u.lastBeg = 0;
   if (name) u.name = name;
   save();
   return u;
