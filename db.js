@@ -8,7 +8,7 @@ const REMOTE = !!(SB_URL && SB_KEY);
 const H = { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-let data = { users: {}, admins: [], owners: [], banned: [], groups: {} };
+let data = { users: {}, admins: [], owners: [], banned: [], groups: {}, migrations: { day: '', used: 0, created: 0, jobs: {} } };
 for (const f of [FILE, FILE + '.bak']) {
   try { if (fs.existsSync(f)) { data = { ...data, ...JSON.parse(fs.readFileSync(f, 'utf8')) }; break; } } catch (e) { console.error('db read failed', f, e.message); }
 }
@@ -56,9 +56,13 @@ const save = () => { if (!timer) timer = setTimeout(flush, 2000); };
 
 function user(n, name) {
   let u = data.users[n];
-  if (!u) u = data.users[n] = { wallet: 500, bank: 0, lastBeg: 0, lastDaily: 0, streak: 0, lastWork: 0, padlock: 0, robCd: 0, name: '' };
+  if (!u) u = data.users[n] = { wallet: 500, bank: 0, lastBeg: 0, lastDaily: 0, streak: 0, lastWork: 0, padlock: 0, robCd: 0, name: '', pets: [], equipped: [], rebirths: 0, oprob: 0 };
   if (u.bank == null) u.bank = 0;
   if (u.lastBeg == null) u.lastBeg = 0;
+  if (!Array.isArray(u.pets)) u.pets = [];
+  if (!Array.isArray(u.equipped)) u.equipped = [];
+  if (u.rebirths == null) u.rebirths = 0;
+  if (u.oprob == null) u.oprob = 0;
   if (name) u.name = name;
   save();
   return u;

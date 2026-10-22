@@ -10,9 +10,26 @@ module.exports = {
 
     def('hidetag', { g: true, a: true, usage: 'hidetag <text>' }, c => c.sock.sendMessage(c.chat, { text: c.args.join(' ') || '📢', mentions: c.meta.participants.map(p => p.id) }));
 
+    // WhatsApp answers a group change with a status per person instead of throwing, so we must check it
+    const WHY = { 401: 'I am not allowed to do that here.', 403: "WhatsApp refused. I must be a group admin, and I can't remove the group creator.", 404: 'That person is not in this group.', 409: 'They already have that role.', 421: 'WhatsApp could not process that, try again.' };
+    async function change(c, jid, action) {
+      const p = c.meta?.participants?.find(p => L.aliases(p).includes(L.nj(jid)));
+      const ids = [...new Set([p?.id, p?.lid, p?.phoneNumber, p?.jid, jid].filter(Boolean))]; // try every id format the person has
+      let status = 'unknown';
+      for (const id of ids) {
+        try {
+          const res = await c.sock.groupParticipantsUpdate(c.chat, [id], action);
+          const st = String(res?.[0]?.status ?? '200');
+          if (st === '200') { L.metaCache.delete(c.chat); return { ok: true }; }
+          status = st;
+        } catch (e) { status = String(e?.data || e?.output?.statusCode || e?.message || 'error'); }
+      }
+      return { ok: false, status };
+    }
     const part = (action, label, title) => async c => {
       const t = c.target(); if (!t) return c.reply(`Usage: ${P}${c.cmd} @user (or reply)`);
-      await c.sock.groupParticipantsUpdate(c.chat, [partId(c.meta, t.jid)], action);
+      const r = await change(c, t.jid, action);
+      if (!r.ok) return c.reply(`⚠️ *${c.cmd.toUpperCase()} FAILED*\n\n${WHY[r.status] || 'WhatsApp said no (' + r.status + ').'}`);
       c.reply(`${title}\n\n@${t.n} ${label}.`, [t.jid]);
     };
 
@@ -62,10 +79,18 @@ module.exports = {
       let removed = 0;
       for (let i = 0; i < targets.length; i += 5) { // small batches with a pause, so WhatsApp doesn't flag the bot
         const batch = targets.slice(i, i + 5);
-        try { await c.sock.groupParticipantsUpdate(c.chat, batch, 'remove'); removed += batch.length; } catch (e) { console.error('kickall batch failed:', e?.message || e); }
+        try { const res = await c.sock.groupParticipantsUpdate(c.chat, batch, 'remove'); removed += Array.isArray(res) ? res.filter(r => String(r.status) === '200').length : batch.length; } catch (e) { console.error('kickall batch failed:', e?.message || e); }
         if (i + 5 < targets.length) await sleep(2000);
       }
+      L.metaCache.delete(c.chat);
       c.reply(`🧹 *KICK ALL*\n\n✅ Removed *${removed}* of ${targets.length} members.${removed < targets.length ? '\n⚠️ Some could not be removed.' : ''}`);
+    });
+
+    def(['economy', 'eco'], { g: true, a: true, usage: 'economy on/off' }, c => {
+      const v = (c.args[0] || '').toLowerCase(), g = db.group(c.chat);
+      if (!['on', 'off'].includes(v)) return c.reply(`💰 *ECONOMY*\n\nStatus in this group: ${g.economy === false ? '*OFF* ❌' : '*ON* ✅'}\nUsage: ${P}economy on|off`);
+      g.economy = v === 'on'; db.save();
+      c.reply(`💰 *ECONOMY*\n\nStatus: ${v === 'on' ? '*ON* ✅\nEconomy, gambling, pets and minigames work here.' : '*OFF* ❌\nEconomy, gambling, pets, minigames and the pigeon are disabled in this group.'}`);
     });
   },
 };

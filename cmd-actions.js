@@ -11,7 +11,7 @@ module.exports = {
     // name: [text with {a}=you {b}=target, nekos.best category, waifu.pics backup category]
     const WITH = { // need someone tagged
       slap: ['👋 {a} slapped {b}!', 'slap', 'slap'], hug: ['🤗 {a} hugged {b}!', 'hug', 'hug'], kiss: ['💋 {a} kissed {b}!', 'kiss', 'kiss'],
-      pat: ['🥰 {a} patted {b}!', 'pat', 'pat'], punch: ['👊 {a} punched {b}!', 'punch', 'bonk'], kick: ['🦵 {a} kicked {b}!', 'kick', 'kick'],
+      pat: ['🥰 {a} patted {b}!', 'pat', 'pat'], punch: ['👊 {a} punched {b}!', 'punch', 'bonk'], yeet: ['🦵 {a} yeeted {b} out!', 'kick', 'kick'],
       cuddle: ['🫂 {a} cuddled {b}!', 'cuddle', 'cuddle'], bite: ['😬 {a} bit {b}!', 'bite', 'bite'], poke: ['👉 {a} poked {b}!', 'poke', 'poke'],
       tickle: ['🤭 {a} tickled {b}!', 'tickle', 'poke'], highfive: ['🙌 {a} high-fived {b}!', 'highfive', 'highfive'], handhold: ['🤝 {a} is holding {b}\'s hand!', 'handhold', 'handhold'],
     };

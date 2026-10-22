@@ -1,6 +1,8 @@
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const { jidNormalizedUser } = require('@whiskeysockets/baileys');
 const db = require('./db');
+const pets = require('./pets');
+const state = { sock: null }; // the live WhatsApp socket (used by background timers)
 
 const P = process.env.PREFIX || '.';
 const BOT = process.env.BOT_NAME || 'EconoBot';
@@ -51,9 +53,9 @@ function bet(c, a, min = MIN) {
 // ---------- tiny animations (edit one message a few times) + spam cooldown ----------
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const ANIM_MS = Number(process.env.ANIM_DELAY ?? 700);
-async function animate(c, frames, final, mentions = []) {
+async function animate(c, frames, final, mentions = [], firstMentions = []) {
   try {
-    const sent = await c.sock.sendMessage(c.chat, { text: frames[0] }, { quoted: c.msg });
+    const sent = await c.sock.sendMessage(c.chat, { text: frames[0], mentions: firstMentions }, { quoted: c.msg });
     for (const f of [...frames.slice(1), final]) {
       await sleep(ANIM_MS);
       await c.sock.sendMessage(c.chat, { text: f, edit: sent.key, mentions: f === final ? mentions : [] });
@@ -73,14 +75,21 @@ function cooldown(c, key, ms) {
   return false;
 }
 
+// categories that count as "economy" (all blocked in a group where an admin ran .economy off)
+const ECON = new Set(['💰 ECONOMY', '🎲 GAMBLING', '🐾 PETS', '🎮 MINIGAMES', '💥 ADMIN ABUSE']);
+
 // ---------- command registry + menu ----------
 const registry = { cmds: {}, menu: {} };
 const makeDef = category => (names, opts, fn) => {
   const { usage, ...rest } = opts || {};
   names = [].concat(names);
-  for (const n of names) registry.cmds[n] = { ...rest, fn };
+  // first registration wins: a later file can never silently replace an existing (core) command
+  const fresh = names.filter(n => !registry.cmds[n]);
+  for (const n of names.filter(n => registry.cmds[n])) console.error(`⚠️ Duplicate command ".${n}" in "${category}" ignored (already defined)`);
+  if (!fresh.length) return;
+  for (const n of fresh) registry.cmds[n] = { ...rest, fn, cat: category };
   const list = (registry.menu[category] ||= []);
-  for (const u of [].concat(usage || names[0])) list.push(u);
+  for (const u of [].concat(usage || fresh[0])) list.push(u);
 };
 function buildMenu() {
   const sections = Object.entries(registry.menu).map(([t, l]) => `┏━ ${t}\n` + l.map(x => `│ ➜ ${P}${x}`).join('\n') + '\n').join('\n');
@@ -105,5 +114,5 @@ function loadCommands(root) {
   console.log(`Loaded ${Object.keys(registry.cmds).length} commands from ${ok}/${order.length} files`);
 }
 
-const L = { P, BOT, OWNERS, MIN, db, num, nj, aliases, esc, rnd, left, parseAmt, m, wal, result, bet, getMeta, resolveNum, partId, registry, buildMenu, loadCommands, metaCache, animate, cooldown, sleep };
+const L = { P, BOT, OWNERS, MIN, db, num, nj, aliases, esc, rnd, left, parseAmt, m, wal, result, bet, getMeta, resolveNum, partId, registry, buildMenu, loadCommands, metaCache, animate, cooldown, sleep, pets, state, ECON };
 module.exports = L;

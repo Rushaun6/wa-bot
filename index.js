@@ -3,12 +3,13 @@ const baileys = require('@whiskeysockets/baileys');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = baileys;
 const pino = require('pino');
 const db = require('./db');
-const { P, BOT, OWNERS, num, nj, aliases, esc, getMeta, resolveNum, registry, loadCommands, metaCache } = require('./lib');
+const { P, BOT, OWNERS, num, nj, aliases, esc, getMeta, resolveNum, registry, loadCommands, metaCache, state: botState, ECON } = require('./lib');
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 const DATA = process.env.DATA_DIR || path.join(__dirname, 'data');
 const AUTH = path.join(DATA, 'auth');
 const PORT = process.env.PORT || 3000;
+const ecoNotice = new Map(); // so the "economy is off" notice isn't spammed
 const ALERT = (process.env.ALERT_NUMBER || OWNERS[0] || '').replace(/\D/g, ''); // who receives caught links
 const LINK_RE = /(https?:\/\/|chat\.whatsapp\.com\/|www\.)\S+/gi;
 
@@ -67,6 +68,11 @@ async function handle(sock, msg) {
   // ".promote <group-link>" runs the group-promo command; ".promote @user" stays the normal admin promote
   const isLink = cmd === 'promote' && /chat\.whatsapp\.com\/[A-Za-z0-9]+/i.test(args.join(' '));
   const c0 = (isLink && registry.cmds.promolink) || registry.cmds[cmd]; if (!c0) return;
+  if (isGroup && ECON.has(c0.cat) && db.data.groups[chat]?.economy === false) { // economy switched off here (.economy off)
+    if (Date.now() > (ecoNotice.get(chat) || 0)) { ecoNotice.set(chat, Date.now() + 30000); await reply('💤 *ECONOMY OFF*\n\nThe economy is turned off in this group.\nGroup admins can turn it on with *' + P + 'economy on*'); }
+    return;
+  }
+  { const pu = db.user(sender); pu.played = true; if (isGroup) pu.lastGroup = chat; } // real players + where pigeons should hunt
 
   const ci = m.extendedTextMessage?.contextInfo;
   const target = () => {
@@ -108,6 +114,7 @@ async function start() {
     
     getMessage: async () => undefined,
   });
+  botState.sock = sock;
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('messages.upsert', u => onMessage(sock, u));
   sock.ev.on('groups.update', u => u.forEach(g => metaCache.delete(g.id)));
