@@ -51,6 +51,46 @@ module.exports = {
           };
         },
       },
+      pet: {
+        usage: '<pet name>', desc: 'give every player a specific pet',
+        run(c, players, args) {
+          const pet = L.pets.find(args.join(' '));
+          if (!pet) return { error: `⚠️ Usage: ${P}ab pet <pet name>  (example: ${P}ab pet pigeon)\nSee all pets: ${P}pet list` };
+          const targets = players.filter(p => !L.pets.owned(db.user(p.n), pet.id));
+          if (!targets.length) return { error: `🐾 Every player here already owns a ${pet.emoji} *${pet.name}*.` };
+          let equipped = 0;
+          for (const p of targets) {
+            const u = db.user(p.n); u.pets.push({ id: pet.id, lvl: 0 });
+            if (u.equipped.length < L.pets.slots(u)) { u.equipped.push(pet.id); equipped++; }
+          }
+          db.save();
+          const e = pet.emoji, tier = L.pets.TIERS[pet.tier];
+          return {
+            frames: [
+              `${T}\n\n🎁 🎁 🎁 🎁 🎁\n\n👑 *${who(c)}* activated *PET DROP*…`,
+              `${T}\n\n${e} ❓ ${e} ❓ ${e}\n❓ ${e} ❓ ${e} ❓\n\n📦 Opening the crates…`,
+              `${T}\n\n${e} ${e} ${e} ${e} ${e}\n${e} ${e} ${e} ${e} ${e}\n\n✨ Pets are arriving…`,
+            ],
+            final: `${T}\n\n${e} *PET DROP!* ${e}\n\n${e} *${pet.name}* — ${tier.icon} ${tier.label}\n${L.pets.describe(pet)}\n\n┏━ 👥 Got one: *${targets.length}*\n│ ✅ Auto-equipped: *${equipped}*\n┗━ 🐾 Already had it: *${players.length - targets.length}*\n\n👑 Courtesy of *${who(c)}*`,
+          };
+        },
+      },
+      oprob: {
+        usage: '', desc: 'OP rob for 30 min (ignores padlocks, up to $3,500 per rob)',
+        run(c, players) {
+          const until = Date.now() + 30 * 60000;
+          for (const p of players) db.user(p.n).oprob = until;
+          db.save();
+          return {
+            frames: [
+              `${T}\n\n🥷 🥷 🥷 🥷 🥷\n\n👑 *${who(c)}* activated *OP ROB*…`,
+              `${T}\n\n⚡ 🥷 ⚡ 🥷 ⚡\n\n🔓 Cracking every padlock…`,
+              `${T}\n\n💥 💥 💥 💥 💥\n\n🥷 Powering up the robbers…`,
+            ],
+            final: `${T}\n\n⚡ *OP ROB ACTIVE!* ⚡\n\n┏━ 👥 Players powered up: *${players.length}*\n│ ⏳ Lasts: *30 min*\n│ 🔓 Ignores padlocks & guard pets\n┗━ 💸 Up to *${m(3500)}* per rob (always works)\n\nGo use ${P}rob @user!\n\n👑 Courtesy of *${who(c)}*`,
+          };
+        },
+      },
     };
 
     const list = () => `${T}\n\n` + Object.entries(ITEMS).map(([k, v]) => `➜ ${P}ab ${k}${v.usage ? ' ' + v.usage : ''} — ${v.desc}`).join('\n') + '\n\n_Owner & bot admins only. Hits every player in this group._';
