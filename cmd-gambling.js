@@ -86,5 +86,24 @@ module.exports = {
     });
 
     def('decline', { g: true }, c => { const k = c.chat + ':' + c.sender; if (pending.delete(k)) c.reply('⚔️ Duel declined.'); });
+
+    // slot3 = "high roller": needs $50k+, weighted symbols, pair = bet back, 30% cashback on a loss
+    const SYM3 = [['🍒', 30, 3], ['🍋', 25, 4], ['🔔', 20, 6], ['💎', 15, 10], ['7️⃣', 10, 25]]; // [emoji, weight, triple multiplier]
+    const SPIN3 = () => { let r = rnd(1, 100); for (const s of SYM3) if ((r -= s[1]) <= 0) return s; return SYM3[0]; };
+    const ANY3 = () => SYM3[rnd(0, SYM3.length - 1)][0];
+    def('slot3', { usage: 'slot3 <bet|all>' }, c => {
+      const u = db.user(c.sender);
+      if (u.wallet < 50000) return c.reply(`🔒 *SLOT3 – HIGH ROLLERS*\n\nYou need at least *${m(50000)}* in your wallet to play.\n${wal(u)}`);
+      const amt = bet(c, c.args[0]); if (!amt || L.cooldown(c, 'game', 3000)) return;
+      const r = [SPIN3(), SPIN3(), SPIN3()], kinds = new Set(r.map(s => s[0])).size; // 1 = triple, 2 = pair, 3 = none
+      let net, mult = 0, note;
+      if (kinds === 1) { mult = r[0][2]; net = amt * mult - amt; note = `🎉 *JACKPOT!* Three ${r[0][0]}`; }
+      else if (kinds === 2) { net = 0; note = '😅 Two of a kind, bet returned.'; }
+      else { const back = Math.floor(amt * 0.3); net = -(amt - back); note = `💔 No match. *${m(back)}* cashback (30%) returned.`; }
+      u.wallet += net; db.save();
+      const T = '🎰 *SLOT3* 🎰';
+      L.animate(c, [`${T}\n\n[ ${ANY3()} | ${ANY3()} | ${ANY3()} ]`, `${T}\n\n[ ${r[0][0]} | ${ANY3()} | ${ANY3()} ]`, `${T}\n\n[ ${r[0][0]} | ${r[1][0]} | ${ANY3()} ]`],
+        `${T}\n\n[ ${r.map(s => s[0]).join(' | ')} ]\n\n${note}\n\n${result(amt, net, mult, u)}`);
+    });
   },
 };
