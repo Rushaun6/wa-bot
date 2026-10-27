@@ -13,6 +13,23 @@ const ecoNotice = new Map(); // so the "economy is off" notice isn't spammed
 const ALERT = (process.env.ALERT_NUMBER || OWNERS[0] || '').replace(/\D/g, ''); // who receives caught links
 const LINK_RE = /(https?:\/\/|chat\.whatsapp\.com\/|www\.)\S+/gi;
 
+// ---------- audit: records every balance change a command causes ----------
+const AUDIT_MIN = Number(process.env.AUDIT_MIN || 100000); // changes this big (up or down) go in the audit log
+const LOSS_CATS = new Set(['🎲 GAMBLING', '🎮 MINIGAMES']); // losses here (and from .rob) count toward .anilb
+const snapBal = () => { const s = {}; for (const n in db.data.users) { const u = db.data.users[n]; s[n] = (u.wallet || 0) + (u.bank || 0); } return s; };
+function trackChanges(before, cat, cmd) {
+  let any = false;
+  for (const n in before) {
+    const u = db.data.users[n]; if (!u) continue;
+    const tot = (u.wallet || 0) + (u.bank || 0), d = tot - before[n];
+    if (!d) continue;
+    any = true;
+    if (d < 0 && (LOSS_CATS.has(cat) || cmd === 'rob')) u.lost = (u.lost || 0) - d;
+    if (Math.abs(d) >= AUDIT_MIN) { (u.audit ||= []).push({ t: Date.now(), cmd, d, bal: tot }); if (u.audit.length > 25) u.audit.shift(); }
+  }
+  if (any) db.save();
+}
+
 loadCommands(__dirname);
 
 // ---------- message handling ----------
@@ -86,7 +103,9 @@ async function handle(sock, msg) {
   if (c0.b && !botIsAdmin) return reply('⚠️ Make me a group admin first.');
 
   const ctx = { sock, msg, chat, isGroup, meta, sender, senderJid, isOwner, isBotAdmin, cmd, args, target, reply };
+  const before = snapBal();
   try { await c0.fn(ctx); } catch (e) { console.error(`cmd ${cmd} failed:`, e?.message || e); reply('⚠️ Something went wrong, try again.').catch(() => {}); }
+  try { trackChanges(before, c0.cat, cmd); } catch (e) { console.error('audit failed:', e?.message || e); }
 }
 
 // ---------- connection ----------
