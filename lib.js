@@ -2,6 +2,7 @@ const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const { jidNormalizedUser } = require('@whiskeysockets/baileys');
 const db = require('./db');
 const pets = require('./pets');
+const items = require('./items');
 const state = { sock: null }; // the live WhatsApp socket (used by background timers)
 
 const P = process.env.PREFIX || '.';
@@ -35,7 +36,7 @@ function resolveNum(meta, jid) {
 const partId = (meta, jid) => meta?.participants?.find(p => aliases(p).includes(nj(jid)))?.id || jid;
 
 // ---------- message formatting ----------
-const m = n => '$' + Math.floor(n).toLocaleString('en-US');
+const m = n => (n < 0 ? '-$' + Math.floor(-n).toLocaleString('en-US') : '$' + Math.floor(n).toLocaleString('en-US')); // negative = in debt
 const wal = u => `💰 Wallet: *${m(u.wallet)}*`;
 const result = (amt, net, mult, u) => {
   const head = net > 0 ? '✅ *YOU WON*' : net < 0 ? '❌ *YOU LOST*' : '🤝 *PUSH*';
@@ -52,6 +53,8 @@ function bet(c, a, min = MIN) {
 
 // ---------- tiny animations (edit one message a few times) + spam cooldown ----------
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// admin-abuse boosts live on the player: u.ab = { cash: {x, until}, luck: {x, until}, sale, frenzy, jackpot ... }
+const abOf = (u, type, def = 1) => { const b = u && u.ab && u.ab[type]; return b && Date.now() < b.until ? b.x : def; };
 const ANIM_MS = Number(process.env.ANIM_DELAY ?? 700);
 async function animate(c, frames, final, mentions = [], firstMentions = []) {
   try {
@@ -114,5 +117,5 @@ function loadCommands(root) {
   console.log(`Loaded ${Object.keys(registry.cmds).length} commands from ${ok}/${order.length} files`);
 }
 
-const L = { P, BOT, OWNERS, MIN, db, num, nj, aliases, esc, rnd, left, parseAmt, m, wal, result, bet, getMeta, resolveNum, partId, registry, buildMenu, loadCommands, metaCache, animate, cooldown, sleep, pets, state, ECON };
+const L = { P, BOT, OWNERS, MIN, db, num, nj, aliases, esc, rnd, left, parseAmt, m, wal, result, bet, getMeta, resolveNum, partId, registry, buildMenu, loadCommands, metaCache, animate, cooldown, sleep, abOf, pets, items, state, ECON };
 module.exports = L;

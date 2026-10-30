@@ -92,5 +92,38 @@ module.exports = {
       g.economy = v === 'on'; db.save();
       c.reply(`💰 *ECONOMY*\n\nStatus: ${v === 'on' ? '*ON* ✅\nEconomy, gambling, pets and minigames work here.' : '*OFF* ❌\nEconomy, gambling, pets, minigames and the pigeon are disabled in this group.'}`);
     });
+
+    // ---------- .warn: 3 warnings and the person is removed (needs the bot to be admin to kick) ----------
+    const wlim = chat => Math.max(2, Math.min(10, db.group(chat).warnLimit || 3));
+    const warnList = (chat, n) => ((db.group(chat).warns ||= {})[n] ||= []);
+    const isAdminOf = (meta, jid) => !!meta?.participants?.find(p => L.aliases(p).includes(L.nj(jid)))?.admin;
+    def('warn', { g: true, a: true, usage: ['warn @user [reason]', 'warns [@user]', 'unwarn @user', 'warnlimit <2-10>'] }, async c => {
+      const t = c.target(); if (!t) return c.reply(`⚠️ *WARN*\n\nTag someone or reply to them.\nExample: ${P}warn @user spamming`);
+      if (t.n === c.sender) return c.reply("🤨 You can't warn yourself.");
+      if (isAdminOf(c.meta, t.jid) || L.OWNERS.includes(t.n) || db.data.owners.includes(t.n)) return c.reply('🛡️ You can\'t warn an admin or an owner.');
+      const reason = c.args.filter(a => !a.startsWith('@')).join(' ').slice(0, 100) || 'no reason given';
+      const list = warnList(c.chat, t.n); list.push({ reason, by: c.sender, t: Date.now() });
+      const lim = wlim(c.chat); db.save();
+      if (list.length < lim) return c.reply(`⚠️ *WARNING ${list.length}/${lim}*\n\n@${t.n}\n📝 Reason: ${reason}\n\n${lim - list.length} more and you're out.`, [t.jid]);
+      delete db.group(c.chat).warns[t.n]; db.save();
+      const me = c.meta.participants.find(p => L.aliases(p).some(a => [L.nj(c.sock.user.id), L.nj(c.sock.user.lid || '')].includes(a)));
+      if (!me?.admin) return c.reply(`🚫 *${lim}/${lim} WARNINGS*\n\n@${t.n} reached the limit, but I'm not an admin so I can't remove them.\nMake me admin and use ${P}kick.`, [t.jid]);
+      try { await c.sock.groupParticipantsUpdate(c.chat, [L.partId(c.meta, t.jid)], 'remove'); c.reply(`🚫 *${lim}/${lim} WARNINGS*\n\n@${t.n} was removed from the group.\n📝 Last reason: ${reason}`, [t.jid]); }
+      catch (e) { c.reply(`🚫 *${lim}/${lim} WARNINGS*\n\n@${t.n} hit the limit but I couldn't remove them.`, [t.jid]); }
+    });
+    def('warns', { g: true, usage: 'warns [@user]' }, c => {
+      const t = c.target(), n = t ? t.n : c.sender, list = warnList(c.chat, n);
+      c.reply(`⚠️ *WARNINGS* @${n}\n\n${list.length ? list.map((w, i) => `${i + 1}. ${w.reason}`).join('\n') : 'Clean record ✅'}\n\nLimit: ${wlim(c.chat)}`, [t ? t.jid : c.senderJid]);
+    });
+    def(['unwarn', 'clearwarns'], { g: true, a: true, usage: 'unwarn @user' }, c => {
+      const t = c.target(); if (!t) return c.reply(`⚠️ Usage: ${P}unwarn @user`);
+      const list = warnList(c.chat, t.n); if (!list.length) return c.reply(`✅ @${t.n} has no warnings.`, [t.jid]);
+      if (c.cmd === 'clearwarns') list.length = 0; else list.pop();
+      db.save(); c.reply(`✅ *WARNING REMOVED*\n\n@${t.n} now has *${list.length}* warning(s).`, [t.jid]);
+    });
+    def('warnlimit', { g: true, a: true, usage: 'warnlimit <2-10>' }, c => {
+      const n = parseInt(c.args[0], 10); if (!(n >= 2 && n <= 10)) return c.reply(`⚠️ Usage: ${P}warnlimit <2-10>  (now ${wlim(c.chat)})`);
+      db.group(c.chat).warnLimit = n; db.save(); c.reply(`⚠️ Warning limit is now *${n}*.`);
+    });
   },
 };

@@ -3,7 +3,7 @@ const baileys = require('@whiskeysockets/baileys');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = baileys;
 const pino = require('pino');
 const db = require('./db');
-const { P, BOT, OWNERS, num, nj, aliases, esc, getMeta, resolveNum, registry, loadCommands, metaCache, state: botState, ECON } = require('./lib');
+const { P, BOT, OWNERS, num, nj, aliases, esc, getMeta, resolveNum, registry, loadCommands, metaCache, state: botState, ECON, pets: PT, abOf } = require('./lib');
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 const DATA = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -18,16 +18,21 @@ const AUDIT_MIN = Number(process.env.AUDIT_MIN || 100000); // changes this big (
 const LOSS_CATS = new Set(['🎲 GAMBLING', '🎮 MINIGAMES']); // losses here (and from .rob) count toward .anilb
 const snapBal = () => { const s = {}; for (const n in db.data.users) { const u = db.data.users[n]; s[n] = (u.wallet || 0) + (u.bank || 0); } return s; };
 function trackChanges(before, cat, cmd) {
-  let any = false;
+  let any = false; const refunds = [];
   for (const n in before) {
     const u = db.data.users[n]; if (!u) continue;
     const tot = (u.wallet || 0) + (u.bank || 0), d = tot - before[n];
     if (!d) continue;
     any = true;
     if (d < 0 && (LOSS_CATS.has(cat) || cmd === 'rob')) u.lost = (u.lost || 0) - d;
+    const cb = d < 0 && LOSS_CATS.has(cat) ? PT.ab(u, 'cashback') : 0; // lucky pets refund part of a gambling loss
+    if (cb > 0) { const back = Math.floor(-d * cb / 100); if (back > 0) { u.wallet += back; u.lost = Math.max(0, (u.lost || 0) - back); refunds.push({ n, text: `🍀 *LUCKY PET CASHBACK*\n\n@${n} got *+$${back.toLocaleString('en-US')}* back (${cb}% of the loss)` }); } }
+    const jx = d > 0 && LOSS_CATS.has(cat) ? abOf(u, 'jackpot', 1) : 1; // JACKPOT HOUR admin abuse: wins pay extra
+    if (jx > 1) { const extra = Math.floor(d * (jx - 1)); if (extra > 0) { u.wallet += extra; refunds.push({ n, text: `🎰 *JACKPOT HOUR* (${jx}x)\n\n@${n} won an extra *+$${extra.toLocaleString('en-US')}*!` }); } }
     if (Math.abs(d) >= AUDIT_MIN) { (u.audit ||= []).push({ t: Date.now(), cmd, d, bal: tot }); if (u.audit.length > 25) u.audit.shift(); }
   }
   if (any) db.save();
+  return refunds;
 }
 
 loadCommands(__dirname);
@@ -105,7 +110,9 @@ async function handle(sock, msg) {
   const ctx = { sock, msg, chat, isGroup, meta, sender, senderJid, isOwner, isBotAdmin, cmd, args, target, reply };
   const before = snapBal();
   try { await c0.fn(ctx); } catch (e) { console.error(`cmd ${cmd} failed:`, e?.message || e); reply('⚠️ Something went wrong, try again.').catch(() => {}); }
-  try { trackChanges(before, c0.cat, cmd); } catch (e) { console.error('audit failed:', e?.message || e); }
+  try {
+    for (const r of trackChanges(before, c0.cat, cmd)) await reply(r.text, [r.n + '@s.whatsapp.net']).catch(() => {});
+  } catch (e) { console.error('audit failed:', e?.message || e); }
 }
 
 // ---------- connection ----------

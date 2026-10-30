@@ -71,7 +71,7 @@ module.exports = {
       const amt = bet(c, c.args.filter(a => !a.startsWith('@')).pop(), 1); if (!amt) return;
       if (db.user(t.n).wallet < amt) return c.reply('⚠️ They cannot afford that bet.');
       pending.set(c.chat + ':' + t.n, { from: c.sender, fromJid: c.senderJid, amt, exp: Date.now() + 60000 });
-      c.reply(`⚔️ *DUEL*\n\n@${c.sender} challenges @${t.n}\nPot: *${m(amt)}* each — 50/50, no cut\n\n@${t.n}, type ${P}accept or ${P}decline within 60s.`, [c.senderJid, t.jid]);
+      c.reply(`⚔️ *DUEL*\n\n@${c.sender} challenges @${t.n}\nPot: *${m(amt)}* each — no cut (duel pets can tilt the odds)\n\n@${t.n}, type ${P}accept or ${P}decline within 60s.`, [c.senderJid, t.jid]);
     });
 
     def('accept', { g: true }, c => {
@@ -80,7 +80,8 @@ module.exports = {
       pending.delete(key);
       const a = db.user(d.from), b = db.user(c.sender);
       if (a.wallet < d.amt || b.wallet < d.amt) return c.reply('⚠️ Duel cancelled — someone can no longer afford it.');
-      const winA = rnd(0, 1) === 0, w = winA ? a : b, l = winA ? b : a, wn = winA ? d.from : c.sender, ln = winA ? c.sender : d.from;
+      const pa = Math.max(5, Math.min(95, 50 + L.pets.duelBonus(a) - L.pets.duelBonus(b))), winA = rnd(1, 100) <= pa, // pet abilities tilt the odds
+         w = winA ? a : b, l = winA ? b : a, wn = winA ? d.from : c.sender, ln = winA ? c.sender : d.from;
       w.wallet += d.amt; l.wallet -= d.amt; db.save();
       c.reply(`⚔️ *DUEL RESULT*\n\n🏆 @${wn} wins *+${m(d.amt)}*\n💀 @${ln} loses *-${m(d.amt)}*`, [d.fromJid, c.senderJid]);
     });

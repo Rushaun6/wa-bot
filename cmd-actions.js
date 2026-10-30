@@ -13,7 +13,8 @@ module.exports = {
       slap: ['👋 {a} slapped {b}!', 'slap', 'slap'], hug: ['🤗 {a} hugged {b}!', 'hug', 'hug'], kiss: ['💋 {a} kissed {b}!', 'kiss', 'kiss'],
       pat: ['🥰 {a} patted {b}!', 'pat', 'pat'], punch: ['👊 {a} punched {b}!', 'punch', 'bonk'], yeet: ['🦵 {a} yeeted {b} out!', 'kick', 'kick'],
       cuddle: ['🫂 {a} cuddled {b}!', 'cuddle', 'cuddle'], bite: ['😬 {a} bit {b}!', 'bite', 'bite'], poke: ['👉 {a} poked {b}!', 'poke', 'poke'],
-      tickle: ['🤭 {a} tickled {b}!', 'tickle', 'poke'], highfive: ['🙌 {a} high-fived {b}!', 'highfive', 'highfive'], handhold: ['🤝 {a} is holding {b}\'s hand!', 'handhold', 'handhold'],
+      tickle: ['🤭 {a} tickled {b}!', 'tickle', 'poke'], facecard: ['{a} gave {b} facecard stamp {stars}', 'pat', 'pat'], // same GIF as .pat
+      highfive: ['🙌 {a} high-fived {b}!', 'highfive', 'highfive'], handhold: ['🤝 {a} is holding {b}\'s hand!', 'handhold', 'handhold'],
     };
     const SOLO = { // just you
       cry: ['😢 {a} is crying...', 'cry', 'cry'], dance: ['💃 {a} is dancing!', 'dance', 'dance'], laugh: ['😂 {a} is laughing!', 'laugh', 'happy'], blush: ['😊 {a} is blushing...', 'blush', 'blush'],
@@ -54,7 +55,8 @@ module.exports = {
       if (running >= 2) return c.reply('⏳ Busy making GIFs, try again in a few seconds.');
       const [tpl, nekos, waifu] = spec;
       const a = '@' + c.sender, b = target ? '@' + target.n : '';
-      const caption = tpl.replace('{a}', a).replace('{b}', b);
+      const stars = () => '⭐'.repeat(L.rnd(1, 4)) + '🌟'; // 2-5 stars, the last one glows
+      const caption = tpl.replace('{a}', a).replace('{b}', b).replace('{stars}', stars());
       const mentions = [c.senderJid, ...(target ? [target.jid] : [])];
       running++;
       try {
@@ -67,13 +69,36 @@ module.exports = {
       } finally { running--; }
     }
 
+    const ALIAS = { facecard: ['facecardstamp', 'fcs'] }; // .facecard stamp @user works too ("stamp" is ignored)
     for (const [name, spec] of Object.entries(WITH)) {
-      def(name, { g: true, usage: `${name} @user` }, c => {
+      def([name, ...(ALIAS[name] || [])], { g: true, usage: `${name} @user` }, c => {
         const t = c.target(); if (!t) return c.reply(`💞 *${name.toUpperCase()}*\n\n⚠️ Tag someone or reply to them.\nExample: ${L.P}${name} @user`);
         return run(c, spec, t);
       });
     }
     for (const [name, spec] of Object.entries(SOLO)) def(name, { usage: name }, c => run(c, spec, null));
     def('wave', { usage: 'wave [@user]' }, c => { const t = c.target(); return run(c, [t ? '👋 {a} waved at {b}!' : '👋 {a} says hi!', 'wave', 'wave'], t); });
+
+    // ---------- .shoot @user — shoot your shot. They answer .yes or .no within 2 minutes ----------
+    const shots = new Map(); // target number -> who shot
+    def('shoot', { g: true, usage: 'shoot @user' }, async c => {
+      const t = c.target(); if (!t) return c.reply(`🏹 *SHOOT YOUR SHOT*\n\n⚠️ Tag who you're shooting your shot at.\nExample: ${L.P}shoot @user`);
+      if (t.n === c.sender) return c.reply("🤨 You can't shoot your shot at yourself.");
+      if (L.cooldown(c, 'shoot', 20000)) return;
+      shots.set(t.n, { from: c.sender, fromJid: c.senderJid, jid: t.jid, exp: Date.now() + 120000 });
+      if (shots.size > 500) for (const [k, v] of shots) if (v.exp < Date.now()) shots.delete(k);
+      await L.animate(c, ['🏹 *SHOOT YOUR SHOT*\n\n🏹 Taking aim…', '🏹 *SHOOT YOUR SHOT*\n\n💘 Shooting…'],
+        `🏹 *SHOOT YOUR SHOT* 💘\n\n@${c.sender} shot their shot at @${t.n}!\n\n❓ @${t.n}, will you give @${c.sender} a chance?\n\nReply *${L.P}yes* or *${L.P}no* (2 min)`, [c.senderJid, t.jid]);
+    });
+    const answer = yes => c => {
+      const s = shots.get(c.sender);
+      if (!s || Date.now() > s.exp) return c.reply('🏹 Nobody has shot their shot at you (or it expired).');
+      shots.delete(c.sender);
+      const lines = yes ? ['💖 *{b}* gave *{a}* a chance!', '🥰 *{b}* said yes to *{a}*!', '💘 The shot landed! *{b}* is giving *{a}* a chance!'] : ['💔 *{b}* said no to *{a}*...', '😬 *{b}* turned *{a}* down. Ouch.', '🚫 *{b}* is not giving *{a}* a chance. Better luck next time!'];
+      const txt = lines[L.rnd(0, lines.length - 1)].replace('{a}', '@' + s.from).replace('{b}', '@' + c.sender);
+      return c.reply(`🏹 *SHOOT YOUR SHOT*\n\n${txt}`, [s.fromJid, c.senderJid]);
+    };
+    def('yes', { g: true, usage: 'yes' }, answer(true));
+    def('no', { g: true, usage: 'no' }, answer(false));
   },
 };
