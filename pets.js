@@ -7,7 +7,7 @@ const TIERS = {
   mythic:    { label: 'Mythic',    icon: '🔴', odds: 5.2, price: 2500000 },
   divine:    { label: 'Divine',    icon: '✨', odds: 2,   price: 15000000 },
   celestial: { label: 'Celestial', icon: '🌌', odds: 0.7, price: 100000000 },
-  cosmic:    { label: 'Cosmic',    icon: '🪐', odds: 0.1, price: 777000000 },
+  cosmic:    { label: 'Cosmic',    icon: '🪐', odds: 0.1, price: 777777777 },
 };
 const ORDER = ['common', 'rare', 'epic', 'legendary', 'mythic', 'divine', 'celestial', 'cosmic'];
 const LVL_MULT = [1, 1.2, 1.5, 2];   // level 0..3
@@ -90,8 +90,8 @@ const EXTRA = {
   trex: [A('robloot', 30), A('fine', 50), A('lockpick', 20)], sauropod: [A('bizboost', 50), A('interest', 0.6)], mammoth: [A('mafia', 50), A('cashback', 10)],
 };
 for (const [id, list] of Object.entries(EXTRA)) { const p = PETS.find(x => x.id === id); if (!p) throw new Error('EXTRA: unknown pet ' + id); p.ab.push(...list); }
-// cosmic: the GOAT. 7x your bank every 70 hours.
-PETS.push(T('cosmic', 'cr7', 'CR7', '🐐', { price: 777000000, noUpgrade: true, ab: [{ type: 'bankmult', mult: 7, hours: 70 }] }));
+// cosmic: the GOAT. Every 70 hours there's a 7% chance your bank gets multiplied by 7.
+PETS.push(T('cosmic', 'cr7', 'CR7', '🐐', { price: 777777777, noUpgrade: true, ab: [{ type: 'bankmult', mult: 7, hours: 70, chance: 7 }] }));
 const BY_ID = Object.fromEntries(PETS.map(p => [p.id, p]));
 const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const find = q => { const k = norm(q); if (!k) return null; return PETS.find(p => p.id === k || norm(p.name) === k) || PETS.find(p => p.id.startsWith(k)); };
@@ -127,7 +127,7 @@ function describe(pet, lvl = 0) {
       interest: `📈 +${Math.round((a.base || 0) * k * 100) / 100}% of your bank every hour`, loanfee: `🤝 -${v}% off loan fees`, loanlimit: `💳 +${v}% borrow limit`,
       mafia: `🇷🇺 ${v}% chance the mafia spares each item & pet`, lockpick: `🔓 +${v}% picklock success`, longlock: `⏳ +${v}% padlock duration`,
       sellprice: `💱 +${v}% more when selling items`, cashback: `🍀 ${v}% of gambling losses refunded`, fine: `🚔 -${v}% fine when a rob fails`, robloot: `💰 +${v}% more stolen when you rob`,
-      bankmult: `🏦 ${a.mult}x the money in your bank every ${a.hours}h` }[a.type]);
+      bankmult: `🏦 every ${a.hours}h: ${a.chance || 100}% chance to multiply the money in your bank by ${a.mult}x` }[a.type]);
   }
   return out.join('\n   ');
 }

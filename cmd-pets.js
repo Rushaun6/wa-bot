@@ -179,9 +179,10 @@ module.exports = {
         const ab = bp.pet.ab.find(a => a.type === 'bankmult'), every = ab.hours * 3600000;
         if (!u.cr7At) { u.cr7At = now; db.save(); continue; }
         if (now - u.cr7At < every) continue;
-        const before = u.bank; u.bank = Math.floor(u.bank * ab.mult); u.cr7At = now; db.save();
+        const before = u.bank, hit = L.rnd(1, 100) <= (ab.chance || 100); // only a 7% chance each time
+        if (hit) u.bank = Math.floor(u.bank * ab.mult); u.cr7At = now; db.save();
         const jid = n + '@s.whatsapp.net';
-        const text = before > 0 ? `🐐 *CR7 SIUUUU!* 🐐\n\n@${n}'s bank just got *${ab.mult}x*!\n🏦 ${m(before)} → *${m(u.bank)}*\n⏳ Next payout in ${ab.hours}h` : `🐐 *CR7* was ready to multiply @${n}'s bank, but it's empty! Deposit some money (${P}deposit all).\n⏳ Next try in ${ab.hours}h`;
+        const text = !hit ? `🐐 *CR7* tried to multiply @${n}'s bank but missed the shot (${ab.chance}% chance)... 😔\n🏦 Bank stays at ${m(u.bank)}\n⏳ Next try in ${ab.hours}h` : before > 0 ? `🐐 *CR7 SIUUUU!* 🐐\n\n@${n}'s bank just got *${ab.mult}x*!\n🏦 ${m(before)} → *${m(u.bank)}*\n⏳ Next payout in ${ab.hours}h` : `🐐 *CR7* was ready to multiply @${n}'s bank, but it's empty! Deposit some money (${P}deposit all).\n⏳ Next try in ${ab.hours}h`;
         if (sock) await sock.sendMessage(u.lastGroup || jid, { text, mentions: [jid] }).catch(() => sock.sendMessage(jid, { text }).catch(() => {}));
       }
     };

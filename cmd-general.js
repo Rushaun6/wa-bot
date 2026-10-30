@@ -25,7 +25,7 @@ module.exports = {
 🐾 *Pets*
 • 104 pets — every animal emoji! New tiers: ✨ Divine, 🌌 Celestial, 🪐 Cosmic
 • Shop restocks every *2 hours* with *6* pets
-• 🐐 *CR7* (777m): 7x the money in your bank every 70 hours
+• 🐐 *CR7* ($777,777,777): every 70 hours it has a 7% chance to multiply your bank by 7x
 • ${P}noti all / ${P}noti legendary … — get a DM when the shop has what you want
 • 🆕 New pets have creative abilities: crate luck, shop haggling, business boosts, bank interest, cheaper loans, mafia protection, picklock bonus, gambling cashback and more (see ${P}pet info <name>)
 

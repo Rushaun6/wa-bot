@@ -90,6 +90,14 @@ async function handle(sock, msg) {
   // ".promote <group-link>" runs the group-promo command; ".promote @user" stays the normal admin promote
   const isLink = cmd === 'promote' && /chat\.whatsapp\.com\/[A-Za-z0-9]+/i.test(args.join(' '));
   const c0 = (isLink && registry.cmds.promolink) || registry.cmds[cmd]; if (!c0) return;
+  { // .disable: switched off everywhere (db.group('__bot')) or in this group. Owners can still use it.
+    const off = (db.data.groups.__bot?.disabled || []).includes(cmd) || (isGroup && (db.data.groups[chat]?.disabled || []).includes(cmd));
+    if (off && !isOwner) {
+      const key = chat + ':' + cmd;
+      if (Date.now() > (ecoNotice.get(key) || 0)) { ecoNotice.set(key, Date.now() + 20000); await reply(`🚫 *${P}${cmd}* is disabled right now.`); }
+      return;
+    }
+  }
   if (isGroup && ECON.has(c0.cat) && db.data.groups[chat]?.economy === false) { // economy switched off here (.economy off)
     if (Date.now() > (ecoNotice.get(chat) || 0)) { ecoNotice.set(chat, Date.now() + 30000); await reply('💤 *ECONOMY OFF*\n\nThe economy is turned off in this group.\nGroup admins can turn it on with *' + P + 'economy on*'); }
     return;

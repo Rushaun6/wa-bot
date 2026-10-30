@@ -106,5 +106,22 @@ module.exports = {
       L.animate(c, [`${T}\n\n[ ${ANY3()} | ${ANY3()} | ${ANY3()} ]`, `${T}\n\n[ ${r[0][0]} | ${ANY3()} | ${ANY3()} ]`, `${T}\n\n[ ${r[0][0]} | ${r[1][0]} | ${ANY3()} ]`],
         `${T}\n\n[ ${r.map(s => s[0]).join(' | ')} ]\n\n${note}\n\n${result(amt, net, mult, u)}`);
     });
+
+    // slot4 = "hard mode": ONLY three of a kind wins (about 4% of spins), but it pays big: x10 / x50 / x100 / x500 / x1000
+    const SYM4 = [['🍀', 33, 10], ['🔔', 17, 50], ['💎', 10, 100], ['👑', 6, 500], ['7️⃣', 4, 1000], ['🍋', 10, 0], ['🍉', 10, 0], ['🍇', 10, 0]]; // [emoji, weight, triple multiplier] (0 = blank, never pays)
+    const SPIN4 = () => { let r = rnd(1, 100); for (const s of SYM4) if ((r -= s[1]) <= 0) return s; return SYM4[0]; };
+    const ANY4 = () => SYM4[rnd(0, SYM4.length - 1)][0];
+    def('slot4', { usage: 'slot4 <bet|all>' }, c => {
+      const T = '🎰 *SLOT4 — HARD MODE* 🎰';
+      if (!c.args[0]) return c.reply(`${T}\n\nOnly *three of a kind* wins, but it pays BIG:\n\n🍀🍀🍀 ➜ *x10*\n🔔🔔🔔 ➜ *x50*\n💎💎💎 ➜ *x100*\n👑👑👑 ➜ *x500*\n7️⃣7️⃣7️⃣ ➜ *x1000*\n\n🍋🍉🍇 are blanks and never pay.\n➜ ${P}slot4 <bet|all>`);
+      const amt = bet(c, c.args[0]); if (!amt || L.cooldown(c, 'game', 3000)) return;
+      const u = db.user(c.sender), r = [SPIN4(), SPIN4(), SPIN4()], win = r[0][0] === r[1][0] && r[1][0] === r[2][0] && r[0][2] > 0;
+      const mult = win ? r[0][2] : 0, net = win ? amt * mult - amt : -amt;
+      const near = !win && (r[0][0] === r[1][0] || r[1][0] === r[2][0]) && r[1][2] >= 50; // a good pair that just missed
+      u.wallet += net; db.save();
+      const note = win ? (mult >= 500 ? `👑🔥 *MEGA JACKPOT!!!* Three ${r[0][0]} 🔥👑` : `🎉 *JACKPOT!* Three ${r[0][0]}`) : near ? '😩 So close! Two shiny ones...' : '💨 No match.';
+      L.animate(c, [`${T}\n\n[ ${ANY4()} | ${ANY4()} | ${ANY4()} ]`, `${T}\n\n[ ${r[0][0]} | ${ANY4()} | ${ANY4()} ]`, `${T}\n\n[ ${r[0][0]} | ${r[1][0]} | ${ANY4()} ]`],
+        `${T}\n\n[ ${r.map(s => s[0]).join(' | ')} ]\n\n${note}\n\n${result(amt, net, mult, u)}`);
+    });
   },
 };
