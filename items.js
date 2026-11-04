@@ -64,7 +64,9 @@ const LOOT = {
   diamond:  { w: [50, 35, 15], cash: [0.3, 1.8], itemMax: 25000000,    petTier: 'legendary' },
   shadow:   { w: [45, 35, 20], cash: [0.3, 2.0], itemMax: 500000000,   petTier: 'mythic' },
   negatron: { w: [40, 35, 25], cash: [0.3, 2.2], itemMax: 10000000000, petTier: 'divine' },
-  mystery:  { w: [40, 40, 20], cash: [0.2, 2.0], itemMax: 25000000,    petTier: 'legendary' },
+  // mystery was a money printer (buy, open, sell the items back). Old: w [40,40,20] cash [0.2,2.0] itemMax 25M petTier legendary.
+  // Now it pays back ~53% on average (max ~96% even with stacked pet bonuses), so farming it always loses.
+  mystery:  { w: [50, 35, 15], cash: [0.1, 1.0], itemMax: 10000000,    petTier: 'epic' },
 };
 
 const BY_ID = Object.fromEntries(ITEMS.map(i => [i.id, i]));

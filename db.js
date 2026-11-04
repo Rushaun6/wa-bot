@@ -8,7 +8,7 @@ const REMOTE = !!(SB_URL && SB_KEY);
 const H = { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-let data = { users: {}, admins: [], owners: [], banned: [], groups: {}, migrations: { day: '', used: 0, created: 0, jobs: {} } };
+let data = { users: {}, admins: [], owners: [], banned: [], groups: {}, events: {}, migrations: { day: '', used: 0, created: 0, jobs: {} } };
 for (const f of [FILE, FILE + '.bak']) {
   try { if (fs.existsSync(f)) { data = { ...data, ...JSON.parse(fs.readFileSync(f, 'utf8')) }; break; } } catch (e) { console.error('db read failed', f, e.message); }
 }

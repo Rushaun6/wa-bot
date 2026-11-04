@@ -103,8 +103,12 @@ module.exports = {
       }
       return cash();
     };
+    // Crates listed here ignore the pet crate bonuses (+% crate cash, double open). With those bonuses a crate pays back more than it costs
+    // (buy, open, sell the items back = free money). Add more ids if you want: 'bronze', 'silver', 'gold', 'diamond', 'shadow', 'negatron'.
+    const NO_PET_BONUS = new Set(['mystery']);
+    const noBonus = (l, crate) => { if (NO_PET_BONUS.has(crate.id)) l.noBonus = true; return l; };
     const applyLoot = (u, l) => {
-      if (l.kind === 'cash') { const bonus = PT.ab(u, 'crate'); if (bonus && !l.dupe) l.amt = Math.floor(l.amt * (1 + bonus / 100)); u.wallet += l.amt; return `💵 *+${m(l.amt)}*${l.dupe ? ` _(you already had ${l.dupe.emoji} ${l.dupe.name}, paid out as cash)_` : ''}`; }
+      if (l.kind === 'cash') { const bonus = l.noBonus ? 0 : PT.ab(u, 'crate'); if (bonus && !l.dupe) l.amt = Math.floor(l.amt * (1 + bonus / 100)); u.wallet += l.amt; return `💵 *+${m(l.amt)}*${l.dupe ? ` _(you already had ${l.dupe.emoji} ${l.dupe.name}, paid out as cash)_` : ''}`; }
       if (l.kind === 'item') { IT.add(u, l.it.id, 1); return `${l.it.emoji} *${l.it.name}* _(${m(l.it.price)} value)_`; }
       u.pets.push({ id: l.pet.id, lvl: 0 }); const eq = u.equipped.length < PT.slots(u) && !u.equipped.includes(l.pet.id); if (eq) u.equipped.push(l.pet.id);
       return `${l.pet.emoji} *${l.pet.name}* — ${PT.TIERS[l.pet.tier].icon} ${PT.TIERS[l.pet.tier].label} pet!${eq ? ' ✅ equipped' : ' 📦 in storage'}`;
@@ -112,9 +116,9 @@ module.exports = {
     function openCrates(c, it, qty) {
       const u = db.user(c.sender), have = IT.count(u, it.id), k = Math.min(qty, have, 10);
       IT.take(u, it.id, k);
-      const lines = []; const dbl = PT.ab(u, 'dblcrate');
+      const lines = []; const dbl = NO_PET_BONUS.has(it.id) ? 0 : PT.ab(u, 'dblcrate');
       for (let i = 0; i < k; i++) {
-        lines.push(applyLoot(u, rollLoot(u, it)));
+        lines.push(applyLoot(u, noBonus(rollLoot(u, it), it)));
         if (dbl && rnd(1, 100) <= dbl) lines.push('🎁 *DOUBLE!* ' + applyLoot(u, rollLoot(u, it)));
       }
       db.save();
