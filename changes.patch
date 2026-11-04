@@ -1,0 +1,100 @@
+diff -u a/cmd-shop.js b/cmd-shop.js
+--- a/cmd-shop.js	2026-11-04 12:19:31.815599457 +0000
++++ b/cmd-shop.js	2026-11-04 12:19:31.963599454 +0000
+@@ -103,8 +103,12 @@
+       }
+       return cash();
+     };
++    // Crates listed here ignore the pet crate bonuses (+% crate cash, double open). With those bonuses a crate pays back more than it costs
++    // (buy, open, sell the items back = free money). Add more ids if you want: 'bronze', 'silver', 'gold', 'diamond', 'shadow', 'negatron'.
++    const NO_PET_BONUS = new Set(['mystery']);
++    const noBonus = (l, crate) => { if (NO_PET_BONUS.has(crate.id)) l.noBonus = true; return l; };
+     const applyLoot = (u, l) => {
+-      if (l.kind === 'cash') { const bonus = PT.ab(u, 'crate'); if (bonus && !l.dupe) l.amt = Math.floor(l.amt * (1 + bonus / 100)); u.wallet += l.amt; return `💵 *+${m(l.amt)}*${l.dupe ? ` _(you already had ${l.dupe.emoji} ${l.dupe.name}, paid out as cash)_` : ''}`; }
++      if (l.kind === 'cash') { const bonus = l.noBonus ? 0 : PT.ab(u, 'crate'); if (bonus && !l.dupe) l.amt = Math.floor(l.amt * (1 + bonus / 100)); u.wallet += l.amt; return `💵 *+${m(l.amt)}*${l.dupe ? ` _(you already had ${l.dupe.emoji} ${l.dupe.name}, paid out as cash)_` : ''}`; }
+       if (l.kind === 'item') { IT.add(u, l.it.id, 1); return `${l.it.emoji} *${l.it.name}* _(${m(l.it.price)} value)_`; }
+       u.pets.push({ id: l.pet.id, lvl: 0 }); const eq = u.equipped.length < PT.slots(u) && !u.equipped.includes(l.pet.id); if (eq) u.equipped.push(l.pet.id);
+       return `${l.pet.emoji} *${l.pet.name}* — ${PT.TIERS[l.pet.tier].icon} ${PT.TIERS[l.pet.tier].label} pet!${eq ? ' ✅ equipped' : ' 📦 in storage'}`;
+@@ -112,9 +116,9 @@
+     function openCrates(c, it, qty) {
+       const u = db.user(c.sender), have = IT.count(u, it.id), k = Math.min(qty, have, 10);
+       IT.take(u, it.id, k);
+-      const lines = []; const dbl = PT.ab(u, 'dblcrate');
++      const lines = []; const dbl = NO_PET_BONUS.has(it.id) ? 0 : PT.ab(u, 'dblcrate');
+       for (let i = 0; i < k; i++) {
+-        lines.push(applyLoot(u, rollLoot(u, it)));
++        lines.push(applyLoot(u, noBonus(rollLoot(u, it), it)));
+         if (dbl && rnd(1, 100) <= dbl) lines.push('🎁 *DOUBLE!* ' + applyLoot(u, rollLoot(u, it)));
+       }
+       db.save();
+diff -u a/db.js b/db.js
+--- a/db.js	2026-11-04 12:19:32.203599448 +0000
++++ b/db.js	2026-11-04 12:19:32.319599445 +0000
+@@ -8,7 +8,7 @@
+ const H = { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
+ const sleep = ms => new Promise(r => setTimeout(r, ms));
+ 
+-let data = { users: {}, admins: [], owners: [], banned: [], groups: {}, migrations: { day: '', used: 0, created: 0, jobs: {} } };
++let data = { users: {}, admins: [], owners: [], banned: [], groups: {}, events: {}, migrations: { day: '', used: 0, created: 0, jobs: {} } };
+ for (const f of [FILE, FILE + '.bak']) {
+   try { if (fs.existsSync(f)) { data = { ...data, ...JSON.parse(fs.readFileSync(f, 'utf8')) }; break; } } catch (e) { console.error('db read failed', f, e.message); }
+ }
+diff -u a/index.js b/index.js
+--- a/index.js	2026-11-04 12:19:32.083599451 +0000
++++ b/index.js	2026-11-04 12:19:32.089468862 +0000
+@@ -13,6 +13,10 @@
+ const ALERT = (process.env.ALERT_NUMBER || OWNERS[0] || '').replace(/\D/g, ''); // who receives caught links
+ const LINK_RE = /(https?:\/\/|chat\.whatsapp\.com\/|www\.)\S+/gi;
+ 
++// WhatsApp group status posts have no text, so they get their own check. These field names are a best guess:
++// start the bot with STATUS_DEBUG=1, post a group status, and the log shows the real key if this needs changing.
++const isStatusMsg = m => !!(m.groupStatusMessage || m.groupStatusMessageV2 || m.groupStatusMentionMessage || m.statusMentionMessage || m.statusAddYours);
++
+ // ---------- audit: records every balance change a command causes ----------
+ const AUDIT_MIN = Number(process.env.AUDIT_MIN || 100000); // changes this big (up or down) go in the audit log
+ const LOSS_CATS = new Set(['🎲 GAMBLING', '🎮 MINIGAMES']); // losses here (and from .rob) count toward .anilb
+@@ -53,12 +57,13 @@
+ 
+   let m = msg.message; m = m.ephemeralMessage?.message || m; m = m.viewOnceMessage?.message || m;
+   const text = (m.conversation || m.extendedTextMessage?.text || m.imageMessage?.caption || m.videoMessage?.caption || '').trim();
+-  if (!text) return;
++  if (process.env.STATUS_DEBUG && msg.key.remoteJid.endsWith('@g.us') && !text) console.log('STATUS_DEBUG message keys:', Object.keys(m));
++  if (!text && !isStatusMsg(m)) return;
+   const chat = msg.key.remoteJid, isGroup = chat.endsWith('@g.us'), fromMe = !!msg.key.fromMe;
+   const ownNum = num(sock.user?.id), ownLid = num(sock.user?.lid);
+   const senderJid = fromMe ? nj(sock.user.id) : nj(isGroup ? (msg.key.participant || msg.participant) : chat);
+   const isCmd = text.startsWith(P);
+-  const needMeta = isGroup && (isCmd || db.group(chat).antilink);
++  const needMeta = isGroup && (isCmd || db.group(chat).antilink || db.group(chat).autodelStatus || (/^\d{1,2}$/.test(text) && botState.hasPick?.(chat)));
+   const meta = needMeta ? await getMeta(sock, chat) : null;
+   const sender = fromMe ? ownNum : resolveNum(meta, senderJid);
+   if (!sender) return;
+@@ -73,6 +78,14 @@
+ 
+   // antilink: send the link to the owner, then delete the message
+   if (!isCmd) {
++    // a plain number ("2") answers a menu such as the .song results; cmd-song.js sets botState.onNumberReply
++    if (/^\d{1,2}$/.test(text) && botState.onNumberReply && (isOwner || !db.data.banned.includes(sender)) &&
++        await botState.onNumberReply({ sock, msg, chat, sender, senderJid, isGroup, text, reply }).catch(() => false)) return;
++    // .groupstatus on: delete group status posts from members (group admins exempt)
++    if (isGroup && !fromMe && db.group(chat).autodelStatus && botIsAdmin && !isGroupAdmin && isStatusMsg(m)) {
++      await sock.sendMessage(chat, { delete: msg.key }).catch(() => {});
++      return;
++    }
+     const found = isGroup && db.group(chat).antilink && !isGroupAdmin && botIsAdmin ? text.match(LINK_RE) : null;
+     if (found) {
+       if (ALERT) { // DM the owner just the deleted link(s), nothing else
+diff -u a/items.js b/items.js
+--- a/items.js	2026-11-04 12:19:31.415599466 +0000
++++ b/items.js	2026-11-04 12:19:31.679599460 +0000
+@@ -64,7 +64,9 @@
+   diamond:  { w: [50, 35, 15], cash: [0.3, 1.8], itemMax: 25000000,    petTier: 'legendary' },
+   shadow:   { w: [45, 35, 20], cash: [0.3, 2.0], itemMax: 500000000,   petTier: 'mythic' },
+   negatron: { w: [40, 35, 25], cash: [0.3, 2.2], itemMax: 10000000000, petTier: 'divine' },
+-  mystery:  { w: [40, 40, 20], cash: [0.2, 2.0], itemMax: 25000000,    petTier: 'legendary' },
++  // mystery was a money printer (buy, open, sell the items back). Old: w [40,40,20] cash [0.2,2.0] itemMax 25M petTier legendary.
++  // Now it pays back ~53% on average (max ~96% even with stacked pet bonuses), so farming it always loses.
++  mystery:  { w: [50, 35, 15], cash: [0.1, 1.0], itemMax: 10000000,    petTier: 'epic' },
+ };
+ 
+ const BY_ID = Object.fromEntries(ITEMS.map(i => [i.id, i]));

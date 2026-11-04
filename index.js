@@ -13,6 +13,10 @@ const ecoNotice = new Map(); // so the "economy is off" notice isn't spammed
 const ALERT = (process.env.ALERT_NUMBER || OWNERS[0] || '').replace(/\D/g, ''); // who receives caught links
 const LINK_RE = /(https?:\/\/|chat\.whatsapp\.com\/|www\.)\S+/gi;
 
+// WhatsApp group status posts have no text, so they get their own check. These field names are a best guess:
+// start the bot with STATUS_DEBUG=1, post a group status, and the log shows the real key if this needs changing.
+const isStatusMsg = m => !!(m.groupStatusMessage || m.groupStatusMessageV2 || m.groupStatusMentionMessage || m.statusMentionMessage || m.statusAddYours);
+
 // ---------- audit: records every balance change a command causes ----------
 const AUDIT_MIN = Number(process.env.AUDIT_MIN || 100000); // changes this big (up or down) go in the audit log
 const LOSS_CATS = new Set(['🎲 GAMBLING', '🎮 MINIGAMES']); // losses here (and from .rob) count toward .anilb
@@ -53,12 +57,13 @@ async function handle(sock, msg) {
 
   let m = msg.message; m = m.ephemeralMessage?.message || m; m = m.viewOnceMessage?.message || m;
   const text = (m.conversation || m.extendedTextMessage?.text || m.imageMessage?.caption || m.videoMessage?.caption || '').trim();
-  if (!text) return;
+  if (process.env.STATUS_DEBUG && msg.key.remoteJid.endsWith('@g.us') && !text) console.log('STATUS_DEBUG message keys:', Object.keys(m));
+  if (!text && !isStatusMsg(m)) return;
   const chat = msg.key.remoteJid, isGroup = chat.endsWith('@g.us'), fromMe = !!msg.key.fromMe;
   const ownNum = num(sock.user?.id), ownLid = num(sock.user?.lid);
   const senderJid = fromMe ? nj(sock.user.id) : nj(isGroup ? (msg.key.participant || msg.participant) : chat);
   const isCmd = text.startsWith(P);
-  const needMeta = isGroup && (isCmd || db.group(chat).antilink);
+  const needMeta = isGroup && (isCmd || db.group(chat).antilink || db.group(chat).autodelStatus || (/^\d{1,2}$/.test(text) && botState.hasPick?.(chat)));
   const meta = needMeta ? await getMeta(sock, chat) : null;
   const sender = fromMe ? ownNum : resolveNum(meta, senderJid);
   if (!sender) return;
@@ -73,6 +78,14 @@ async function handle(sock, msg) {
 
   // antilink: send the link to the owner, then delete the message
   if (!isCmd) {
+    // a plain number ("2") answers a menu such as the .song results; cmd-song.js sets botState.onNumberReply
+    if (/^\d{1,2}$/.test(text) && botState.onNumberReply && (isOwner || !db.data.banned.includes(sender)) &&
+        await botState.onNumberReply({ sock, msg, chat, sender, senderJid, isGroup, text, reply }).catch(() => false)) return;
+    // .groupstatus on: delete group status posts from members (group admins exempt)
+    if (isGroup && !fromMe && db.group(chat).autodelStatus && botIsAdmin && !isGroupAdmin && isStatusMsg(m)) {
+      await sock.sendMessage(chat, { delete: msg.key }).catch(() => {});
+      return;
+    }
     const found = isGroup && db.group(chat).antilink && !isGroupAdmin && botIsAdmin ? text.match(LINK_RE) : null;
     if (found) {
       if (ALERT) { // DM the owner just the deleted link(s), nothing else
