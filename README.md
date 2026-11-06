@@ -1,20 +1,20 @@
 # What to upload
 
-**add/**      new files. Drop them next to your other cmd-*.js files. (potions.js and cmd-potions.js REPLACE last round's copies.)
-**replace/**  4 existing files with edits. If you changed them on GitHub since, apply `changes.patch` instead of replacing.
+**add/**      new files. Drop them next to your other cmd-*.js files.
+              (cmd-events.js, potions.js and cmd-potions.js REPLACE earlier copies.)
+**replace/**  4 existing files with edits (items.js, cmd-shop.js, index.js, db.js).
+              If you changed them on GitHub since, apply `changes.patch` instead of replacing.
 
-## Added this round
-18 new items/crates, 13 potions (was 10), and a Potion Crate.
-- Robbery: Ghost Cloak.  Protection: Guard Dog, Alarm System, Vault Door.
-- Business: Coffee Shop, Factory, Casino, Space Port.  Luxury: Rare Painting, Helicopter (6 rebirths), Private Jet, Moon Base.
-- Crates: Copper, Potion, Emerald, Frost, Inferno, Cosmic.
-- Potions good: Luck Brew, Four-Leaf Tonic, Stardust Elixir, Adrenaline Shot, Rage Potion, Rainbow Remedy, Lucky Flask.
-- Potions bad (gift only): Skunk Tonic, Snake Oil, Clown Elixir, Jinx Juice, Leaky Pocket, Jail Juice.
+## This round
+- cmd-events.js     23 events that scale with wealth (see .eventlist). Warnings, live races, an opt-in gamble.
+- cmd-audit.js      owner command .audit: shows the richest accounts' raw values + everything the money-safety code fixed.
+- db.js             money safety: text/NaN/Infinity/null balances are repaired on every save (last good value restored), names are cleaned.
+- index.js          stamps `seen` on each player (events skip accounts inactive for 7 days). Also has the group-status delete from before.
 
-## Fixed from last round (potions)
-Money Flask paid 2x its price, and the cash potions multiplied passive income (worth millions to rich players). Removed.
-Curses that take money are now capped (Jinx max $300k, Leaky max $120k).
+## Tuning the events
+All numbers are in cmd-events.js: the first lines of each event (percentages, minimums, minutes) and `w:` (how common it is).
+Average effect of the money events is roughly +1-2% of net worth per day, with tax/repair/bandits as money sinks.
 
-## Old crates still exploitable
-bronze/silver/gold/diamond/shadow/negatron return 150-200% with crate pets (negatron 101% even without).
-To fix: add their ids to NO_PET_BONUS in cmd-shop.js (negatron also needs a lower loot table).
+## Known issues I did NOT change
+- bronze/silver/gold/diamond/shadow/negatron crates return 150-200% with crate pets (see NO_PET_BONUS in cmd-shop.js).
+- Shop loop: with haggle + sell-bonus pets at their caps you buy at 75% and sell at 80% (about +25k per $500k item, repeatable).

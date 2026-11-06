@@ -1,6 +1,6 @@
 diff -u a/cmd-shop.js b/cmd-shop.js
---- a/cmd-shop.js	2026-11-05 12:30:49.790601564 +0000
-+++ b/cmd-shop.js	2026-11-05 12:30:49.793315931 +0000
+--- a/cmd-shop.js	2026-11-06 12:44:30.802563255 +0000
++++ b/cmd-shop.js	2026-11-06 12:44:30.807521847 +0000
 @@ -3,7 +3,7 @@
    category: '💰 ECONOMY',
    register(def, L) {
@@ -55,9 +55,9 @@ diff -u a/cmd-shop.js b/cmd-shop.js
        if (!IT.count(u, it.id)) return c.reply(`🎒 You don't have a ${it.emoji} *${it.name}*. Buy one: ${P}buy ${it.id}`);
        openCrates(c, it, qty);
 diff -u a/db.js b/db.js
---- a/db.js	2026-11-05 12:30:50.130601584 +0000
-+++ b/db.js	2026-11-05 12:30:50.286601593 +0000
-@@ -8,7 +8,7 @@
+--- a/db.js	2026-11-06 12:44:31.066563264 +0000
++++ b/db.js	2026-11-06 12:44:31.069567263 +0000
+@@ -8,11 +8,54 @@
  const H = { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
  const sleep = ms => new Promise(r => setTimeout(r, ms));
  
@@ -66,9 +66,92 @@ diff -u a/db.js b/db.js
  for (const f of [FILE, FILE + '.bak']) {
    try { if (fs.existsSync(f)) { data = { ...data, ...JSON.parse(fs.readFileSync(f, 'utf8')) }; break; } } catch (e) { console.error('db read failed', f, e.message); }
  }
+ 
++// ---------- money safety ----------
++// A wallet/bank must always be a finite number. Bad values break the leaderboard and every "wallet += x":
++//   text like "9000000000"  -> "9000000000" + 500 = "9000000000500" (x1000), and the leaderboard shows 10x
++//   NaN / Infinity / undefined -> sort order breaks, "$NaN" / "$∞", and they save as null so the balance is lost on restart
++// This converts text back to a number, and for NaN/Infinity/null it restores the last good value (or 0), and logs what happened (see .audit).
++const good = new Map(); // last known-good wallet/bank per user (memory only)
++const toNum = v => {
++  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
++  if (typeof v === 'bigint') { const n = Number(v); return Number.isFinite(n) ? n : null; }
++  if (typeof v === 'string' && /^\s*-?\d+(\.\d+)?(e[+-]?\d+)?\s*$/i.test(v)) { const n = Number(v); return Number.isFinite(n) ? n : null; }
++  return null;
++};
++const cleanName = s => String(s).replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e*_~`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 32);
++function noteFix(id, u, field, was, now, how) {
++  const log = ((data.events ||= {}).fixLog ||= []);
++  log.unshift({ id, name: u.name || '', field, was: typeof was + ':' + String(was).slice(0, 40), now, how, at: Date.now() });
++  log.length = Math.min(log.length, 25);
++  console.warn(`⚠️ db: fixed ${field} of ${id}: ${typeof was} ${String(was).slice(0, 40)} -> ${now} (${how})`);
++}
++function fixUser(id, u) {
++  let changed = false;
++  for (const k of ['wallet', 'bank']) {
++    const v = u[k];
++    if (typeof v === 'number' && Number.isFinite(v)) continue;
++    if (v === undefined && k === 'bank') continue;           // user() fills a missing bank with 0
++    const n = toNum(v);
++    if (n !== null) { noteFix(id, u, k, v, n, 'converted to a number'); u[k] = n; }
++    else { const g = good.get(id)?.[k]; const now = g ?? 0; noteFix(id, u, k, v, now, g !== undefined ? 'restored last good value' : 'reset to 0, original value was unrecoverable'); u[k] = now; }
++    changed = true;
++  }
++  if (u.name && typeof u.name === 'string' && cleanName(u.name) !== u.name) u.name = cleanName(u.name); // newlines / * _ ~ break the list formatting
++  return changed;
++}
++function sanitize() {
++  let n = 0;
++  for (const [id, u] of Object.entries(data.users || {})) { if (u && typeof u === 'object' && fixUser(id, u)) n++; }
++  return n;
++}
++function remember() { // called after sanitize: record each balance that is healthy
++  for (const [id, u] of Object.entries(data.users || {})) if (u && Number.isFinite(u.wallet) && Number.isFinite(u.bank ?? 0)) good.set(id, { wallet: u.wallet, bank: u.bank ?? 0 });
++}
++sanitize(); remember();
++
+ let loaded = !REMOTE; // never write to Supabase until we've read from it
+ async function loadRemote() {
+   for (let i = 1; !loaded; i++) {
+@@ -27,6 +70,7 @@
+           else if (data[k] && typeof data[k] === 'object') { for (const x of Object.keys(data[k])) delete data[k][x]; Object.assign(data[k], remote[k]); }
+         }
+       }
++      sanitize(); remember();
+       loaded = true; console.log('✅ Supabase data loaded' + (remote ? '' : ' (first run)'));
+       save();
+     } catch (e) { console.error('Supabase load failed, retrying:', e.message); await sleep(Math.min(30000, 2000 * i)); }
+@@ -51,8 +95,9 @@
+   } catch (e) { /* local disk is optional when Supabase is used */ }
+ }
+ let timer = null;
+-function flush() { clearTimeout(timer); timer = null; writeLocal(); push(); }
+-const save = () => { if (!timer) timer = setTimeout(flush, 2000); };
++function flush() { clearTimeout(timer); timer = null; sanitize(); remember(); writeLocal(); push(); }
++let lastSan = 0;
++const save = () => { if (Date.now() - lastSan > 250) { lastSan = Date.now(); sanitize(); } if (!timer) timer = setTimeout(flush, 2000); };
+ 
+ function user(n, name) {
+   let u = data.users[n];
+@@ -63,7 +108,8 @@
+   if (!Array.isArray(u.equipped)) u.equipped = [];
+   if (u.rebirths == null) u.rebirths = 0;
+   if (u.oprob == null) u.oprob = 0;
+-  if (name) u.name = name;
++  if (name) u.name = cleanName(name);
++  fixUser(n, u);
+   save();
+   return u;
+ }
+@@ -72,4 +118,4 @@
+ process.on('SIGTERM', shutdown);
+ process.on('SIGINT', shutdown);
+ if (REMOTE) loadRemote();
+-module.exports = { data, user, group, save, flush, FILE };
++module.exports = { data, user, group, save, flush, sanitize, FILE };
 diff -u a/index.js b/index.js
---- a/index.js	2026-11-05 12:30:49.894601570 +0000
-+++ b/index.js	2026-11-05 12:30:50.010601577 +0000
+--- a/index.js	2026-11-06 12:44:30.914563259 +0000
++++ b/index.js	2026-11-06 12:44:30.917621827 +0000
 @@ -13,6 +13,10 @@
  const ALERT = (process.env.ALERT_NUMBER || OWNERS[0] || '').replace(/\D/g, ''); // who receives caught links
  const LINK_RE = /(https?:\/\/|chat\.whatsapp\.com\/|www\.)\S+/gi;
@@ -111,9 +194,18 @@ diff -u a/index.js b/index.js
      const found = isGroup && db.group(chat).antilink && !isGroupAdmin && botIsAdmin ? text.match(LINK_RE) : null;
      if (found) {
        if (ALERT) { // DM the owner just the deleted link(s), nothing else
+@@ -102,7 +115,7 @@
+     if (Date.now() > (ecoNotice.get(chat) || 0)) { ecoNotice.set(chat, Date.now() + 30000); await reply('💤 *ECONOMY OFF*\n\nThe economy is turned off in this group.\nGroup admins can turn it on with *' + P + 'economy on*'); }
+     return;
+   }
+-  { const pu = db.user(sender); pu.played = true; if (isGroup) pu.lastGroup = chat; } // real players + where pigeons should hunt
++  { const pu = db.user(sender); pu.played = true; pu.seen = Date.now(); if (isGroup) pu.lastGroup = chat; } // real players + where pigeons should hunt
+ 
+   const ci = m.extendedTextMessage?.contextInfo;
+   const target = () => {
 diff -u a/items.js b/items.js
---- a/items.js	2026-11-05 12:30:49.674601557 +0000
-+++ b/items.js	2026-11-05 12:30:49.678301097 +0000
+--- a/items.js	2026-11-06 12:44:30.686563251 +0000
++++ b/items.js	2026-11-06 12:44:30.692206662 +0000
 @@ -17,38 +17,56 @@
    I('gloves', 'robbery', '🧤', 'Basic Gloves', 15000, { rob: 5, desc: '+5% rob success (permanent)' }),
    I('disguise', 'robbery', '🥷', 'Advanced Disguise', 100000, { rob: 10, desc: '+10% rob success (permanent)' }),

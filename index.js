@@ -115,7 +115,7 @@ async function handle(sock, msg) {
     if (Date.now() > (ecoNotice.get(chat) || 0)) { ecoNotice.set(chat, Date.now() + 30000); await reply('💤 *ECONOMY OFF*\n\nThe economy is turned off in this group.\nGroup admins can turn it on with *' + P + 'economy on*'); }
     return;
   }
-  { const pu = db.user(sender); pu.played = true; if (isGroup) pu.lastGroup = chat; } // real players + where pigeons should hunt
+  { const pu = db.user(sender); pu.played = true; pu.seen = Date.now(); if (isGroup) pu.lastGroup = chat; } // real players + where pigeons should hunt
 
   const ci = m.extendedTextMessage?.contextInfo;
   const target = () => {
