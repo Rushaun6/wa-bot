@@ -1,25 +1,20 @@
 # What to upload
 
-**add/** = new files. Drop them next to your other cmd-*.js files (no clashes with your existing commands).
-**replace/** = 4 existing files with small edits. If you changed them on GitHub since, apply `changes.patch` instead of replacing.
-No new npm packages needed.
+**add/**      new files. Drop them next to your other cmd-*.js files. (potions.js and cmd-potions.js REPLACE last round's copies.)
+**replace/**  4 existing files with edits. If you changed them on GitHub since, apply `changes.patch` instead of replacing.
 
-## .song setup (put these in your .env or hosting variables)
-JAMENDO_CLIENT_ID   free key from devportal.jamendo.com  -> enables Jamendo (Creative Commons music, downloadable)
-YOUTUBE_API_KEY     YouTube Data API v3 key (Google Cloud) -> enables YouTube results (LINK ONLY, never downloaded)
-MUSIC_DIR           optional, default ./music  -> put MP3s you own in it, named "Artist - Title.mp3"
-Optional limits: SONG_MAX_JOBS (2), SONG_DL_TIMEOUT_MS (180000), SONG_MAX_MB (80), SONG_DOC_MAX_MB (64)
-The Internet Archive needs no key. ffmpeg is already covered by ffmpeg-static (or set FFMPEG_PATH).
+## Added this round
+18 new items/crates, 13 potions (was 10), and a Potion Crate.
+- Robbery: Ghost Cloak.  Protection: Guard Dog, Alarm System, Vault Door.
+- Business: Coffee Shop, Factory, Casino, Space Port.  Luxury: Rare Painting, Helicopter (6 rebirths), Private Jet, Moon Base.
+- Crates: Copper, Potion, Emerald, Frost, Inferno, Cosmic.
+- Potions good: Luck Brew, Four-Leaf Tonic, Stardust Elixir, Adrenaline Shot, Rage Potion, Rainbow Remedy, Lucky Flask.
+- Potions bad (gift only): Skunk Tonic, Snake Oil, Clown Elixir, Jinx Juice, Leaky Pocket, Jail Juice.
 
-## Commands
-.song <name> (.music)  search, then reply with the result number
-.slot5 <bet|all>       5-reel slot, wild + scatter, 90.7% payout
-.kill .gun(.bang) .simp(.sym) .fuck/.fu .hack .jail .rizz .iq .vibe .flip
-.groupstatus on|off    auto-delete group status posts (needs index.js edit + bot admin)
-+ events, gifting, potions, pet battles (.battle/.wild), story, .sticker, .audio
+## Fixed from last round (potions)
+Money Flask paid 2x its price, and the cash potions multiplied passive income (worth millions to rich players). Removed.
+Curses that take money are now capped (Jinx max $300k, Leaky max $120k).
 
-## Edits to existing files
-items.js      mystery box loot table lowered (pays back ~54% instead of ~100-190%)
-cmd-shop.js   NO_PET_BONUS list: crate pets no longer apply to the mystery box
-index.js      (1) group status auto-delete  (2) a plain "2" answers a .song search  (3) loads group info for that reply only when a search is waiting
-db.js         adds the `events` key so event timers sync to Supabase
+## Old crates still exploitable
+bronze/silver/gold/diamond/shadow/negatron return 150-200% with crate pets (negatron 101% even without).
+To fix: add their ids to NO_PET_BONUS in cmd-shop.js (negatron also needs a lower loot table).

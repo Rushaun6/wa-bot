@@ -3,7 +3,7 @@ module.exports = {
   category: '💰 ECONOMY',
   register(def, L) {
     const { P, db, m, wal, rnd, left, num } = L;
-    const PT = L.pets, IT = L.items;
+    const PT = L.pets, IT = L.items, POT = require('./potions');
     const pick = a => a[rnd(0, a.length - 1)];
     const bizIncome = u => Math.floor(IT.income(u) * (1 + PT.ab(u, 'bizboost') / 100)); // businesses + pet bonus
     const plain = n => '$' + Math.floor(n).toLocaleString('en-US');
@@ -85,6 +85,7 @@ module.exports = {
     // ---------------- crates & mystery box ----------------
     const rollLoot = (u, crate) => {
       const L0 = IT.LOOT[crate.id], price = crate.price, luck = L.abOf(u, 'luck'); // luck event: items & pets drop more often
+      if (L0.potions) return { kind: 'potion', list: rnd(1, 100) <= 30 ? [POT.randomPotion(rnd), POT.randomPotion(rnd)] : [POT.randomPotion(rnd)] };
       const w = [L0.w[0], L0.w[1] * luck, L0.w[2] * luck], tot = w[0] + w[1] + w[2];
       let r = rnd(1, Math.round(tot * 100)) / 100, kind = r <= w[0] ? 'cash' : r <= w[0] + w[1] ? 'item' : 'pet';
       const cash = () => { const x = L0.cash[0] + (L0.cash[1] - L0.cash[0]) * rnd(0, 1000) / 1000; return { kind: 'cash', amt: Math.floor(price * x) }; };
@@ -104,10 +105,11 @@ module.exports = {
       return cash();
     };
     // Crates listed here ignore the pet crate bonuses (+% crate cash, double open). With those bonuses a crate pays back more than it costs
-    // (buy, open, sell the items back = free money). Add more ids if you want: 'bronze', 'silver', 'gold', 'diamond', 'shadow', 'negatron'.
-    const NO_PET_BONUS = new Set(['mystery']);
+    // (buy, open, sell the items back = free money). Add more ids if you want: 'bronze', 'silver', 'gold', 'diamond', 'shadow', 'negatron' (the new crates are already in the list).
+    const NO_PET_BONUS = new Set(['mystery', 'copper', 'potion', 'emerald', 'frost', 'inferno', 'cosmic']);
     const noBonus = (l, crate) => { if (NO_PET_BONUS.has(crate.id)) l.noBonus = true; return l; };
     const applyLoot = (u, l) => {
+      if (l.kind === 'potion') { l.list.forEach(p => POT.add(u, p.id, 1)); return l.list.map(p => `${p.emoji} *${p.name}*${p.kind === 'bad' ? ' ☠️ _cursed, gift it_' : ''}`).join(' + '); }
       if (l.kind === 'cash') { const bonus = l.noBonus ? 0 : PT.ab(u, 'crate'); if (bonus && !l.dupe) l.amt = Math.floor(l.amt * (1 + bonus / 100)); u.wallet += l.amt; return `💵 *+${m(l.amt)}*${l.dupe ? ` _(you already had ${l.dupe.emoji} ${l.dupe.name}, paid out as cash)_` : ''}`; }
       if (l.kind === 'item') { IT.add(u, l.it.id, 1); return `${l.it.emoji} *${l.it.name}* _(${m(l.it.price)} value)_`; }
       u.pets.push({ id: l.pet.id, lvl: 0 }); const eq = u.equipped.length < PT.slots(u) && !u.equipped.includes(l.pet.id); if (eq) u.equipped.push(l.pet.id);
@@ -127,7 +129,7 @@ module.exports = {
     }
     def('open', { usage: 'open <crate|mystery> [amount]' }, c => {
       const { qty, it } = qtyAndName(c.args);
-      if (!it || !it.crate) return c.reply(`⚠️ Usage: ${P}open <crate>\nCrates: bronze, silver, gold, diamond, shadow, negatron, mystery`);
+      if (!it || !it.crate) return c.reply(`⚠️ Usage: ${P}open <crate>\nCrates: ${IT.ITEMS.filter(i => i.crate).map(i => i.id).join(', ')}`);
       const u = db.user(c.sender);
       if (!IT.count(u, it.id)) return c.reply(`🎒 You don't have a ${it.emoji} *${it.name}*. Buy one: ${P}buy ${it.id}`);
       openCrates(c, it, qty);

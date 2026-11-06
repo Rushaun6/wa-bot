@@ -29,7 +29,10 @@ module.exports = {
       if (!p) return c.reply(`⚠️ Unknown potion. See ${P}potions`);
       const u = db.user(c.sender);
       if (p.kind === 'bad') return c.reply(`☠️ ${p.emoji} *${p.name}* is cursed. You can't drink it, but you can gift it to someone.\nUse: ${P}gift @user ${p.id}`);
-      if (!POT.take(u, p.id)) return c.reply(`⚠️ You don't have a ${p.emoji} ${p.name}. Buy one with ${P}buypotion ${p.id}`);
+      if (!POT.count(u, p.id)) return c.reply(`⚠️ You don't have a ${p.emoji} ${p.name}. Buy one with ${P}buypotion ${p.id}`);
+      const why = POT.blockReason(u, p);
+      if (why) return c.reply(`🧪 ${p.emoji} *${p.name}*\n\n⚠️ ${why}`);
+      POT.take(u, p.id);
       const note = POT.apply(u, p); db.save();
       c.reply(`🥤 *${p.emoji} ${p.name.toUpperCase()}*\n\n✨ ${note}\n💰 Wallet: *${m(u.wallet)}*`);
     });

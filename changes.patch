@@ -1,21 +1,39 @@
 diff -u a/cmd-shop.js b/cmd-shop.js
---- a/cmd-shop.js	2026-11-04 12:19:31.815599457 +0000
-+++ b/cmd-shop.js	2026-11-04 12:19:31.963599454 +0000
-@@ -103,8 +103,12 @@
+--- a/cmd-shop.js	2026-11-05 12:30:49.790601564 +0000
++++ b/cmd-shop.js	2026-11-05 12:30:49.793315931 +0000
+@@ -3,7 +3,7 @@
+   category: '💰 ECONOMY',
+   register(def, L) {
+     const { P, db, m, wal, rnd, left, num } = L;
+-    const PT = L.pets, IT = L.items;
++    const PT = L.pets, IT = L.items, POT = require('./potions');
+     const pick = a => a[rnd(0, a.length - 1)];
+     const bizIncome = u => Math.floor(IT.income(u) * (1 + PT.ab(u, 'bizboost') / 100)); // businesses + pet bonus
+     const plain = n => '$' + Math.floor(n).toLocaleString('en-US');
+@@ -85,6 +85,7 @@
+     // ---------------- crates & mystery box ----------------
+     const rollLoot = (u, crate) => {
+       const L0 = IT.LOOT[crate.id], price = crate.price, luck = L.abOf(u, 'luck'); // luck event: items & pets drop more often
++      if (L0.potions) return { kind: 'potion', list: rnd(1, 100) <= 30 ? [POT.randomPotion(rnd), POT.randomPotion(rnd)] : [POT.randomPotion(rnd)] };
+       const w = [L0.w[0], L0.w[1] * luck, L0.w[2] * luck], tot = w[0] + w[1] + w[2];
+       let r = rnd(1, Math.round(tot * 100)) / 100, kind = r <= w[0] ? 'cash' : r <= w[0] + w[1] ? 'item' : 'pet';
+       const cash = () => { const x = L0.cash[0] + (L0.cash[1] - L0.cash[0]) * rnd(0, 1000) / 1000; return { kind: 'cash', amt: Math.floor(price * x) }; };
+@@ -103,8 +104,13 @@
        }
        return cash();
      };
 +    // Crates listed here ignore the pet crate bonuses (+% crate cash, double open). With those bonuses a crate pays back more than it costs
-+    // (buy, open, sell the items back = free money). Add more ids if you want: 'bronze', 'silver', 'gold', 'diamond', 'shadow', 'negatron'.
-+    const NO_PET_BONUS = new Set(['mystery']);
++    // (buy, open, sell the items back = free money). Add more ids if you want: 'bronze', 'silver', 'gold', 'diamond', 'shadow', 'negatron' (the new crates are already in the list).
++    const NO_PET_BONUS = new Set(['mystery', 'copper', 'potion', 'emerald', 'frost', 'inferno', 'cosmic']);
 +    const noBonus = (l, crate) => { if (NO_PET_BONUS.has(crate.id)) l.noBonus = true; return l; };
      const applyLoot = (u, l) => {
 -      if (l.kind === 'cash') { const bonus = PT.ab(u, 'crate'); if (bonus && !l.dupe) l.amt = Math.floor(l.amt * (1 + bonus / 100)); u.wallet += l.amt; return `💵 *+${m(l.amt)}*${l.dupe ? ` _(you already had ${l.dupe.emoji} ${l.dupe.name}, paid out as cash)_` : ''}`; }
++      if (l.kind === 'potion') { l.list.forEach(p => POT.add(u, p.id, 1)); return l.list.map(p => `${p.emoji} *${p.name}*${p.kind === 'bad' ? ' ☠️ _cursed, gift it_' : ''}`).join(' + '); }
 +      if (l.kind === 'cash') { const bonus = l.noBonus ? 0 : PT.ab(u, 'crate'); if (bonus && !l.dupe) l.amt = Math.floor(l.amt * (1 + bonus / 100)); u.wallet += l.amt; return `💵 *+${m(l.amt)}*${l.dupe ? ` _(you already had ${l.dupe.emoji} ${l.dupe.name}, paid out as cash)_` : ''}`; }
        if (l.kind === 'item') { IT.add(u, l.it.id, 1); return `${l.it.emoji} *${l.it.name}* _(${m(l.it.price)} value)_`; }
        u.pets.push({ id: l.pet.id, lvl: 0 }); const eq = u.equipped.length < PT.slots(u) && !u.equipped.includes(l.pet.id); if (eq) u.equipped.push(l.pet.id);
        return `${l.pet.emoji} *${l.pet.name}* — ${PT.TIERS[l.pet.tier].icon} ${PT.TIERS[l.pet.tier].label} pet!${eq ? ' ✅ equipped' : ' 📦 in storage'}`;
-@@ -112,9 +116,9 @@
+@@ -112,9 +118,9 @@
      function openCrates(c, it, qty) {
        const u = db.user(c.sender), have = IT.count(u, it.id), k = Math.min(qty, have, 10);
        IT.take(u, it.id, k);
@@ -27,9 +45,18 @@ diff -u a/cmd-shop.js b/cmd-shop.js
          if (dbl && rnd(1, 100) <= dbl) lines.push('🎁 *DOUBLE!* ' + applyLoot(u, rollLoot(u, it)));
        }
        db.save();
+@@ -123,7 +129,7 @@
+     }
+     def('open', { usage: 'open <crate|mystery> [amount]' }, c => {
+       const { qty, it } = qtyAndName(c.args);
+-      if (!it || !it.crate) return c.reply(`⚠️ Usage: ${P}open <crate>\nCrates: bronze, silver, gold, diamond, shadow, negatron, mystery`);
++      if (!it || !it.crate) return c.reply(`⚠️ Usage: ${P}open <crate>\nCrates: ${IT.ITEMS.filter(i => i.crate).map(i => i.id).join(', ')}`);
+       const u = db.user(c.sender);
+       if (!IT.count(u, it.id)) return c.reply(`🎒 You don't have a ${it.emoji} *${it.name}*. Buy one: ${P}buy ${it.id}`);
+       openCrates(c, it, qty);
 diff -u a/db.js b/db.js
---- a/db.js	2026-11-04 12:19:32.203599448 +0000
-+++ b/db.js	2026-11-04 12:19:32.319599445 +0000
+--- a/db.js	2026-11-05 12:30:50.130601584 +0000
++++ b/db.js	2026-11-05 12:30:50.286601593 +0000
 @@ -8,7 +8,7 @@
  const H = { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
  const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -40,8 +67,8 @@ diff -u a/db.js b/db.js
    try { if (fs.existsSync(f)) { data = { ...data, ...JSON.parse(fs.readFileSync(f, 'utf8')) }; break; } } catch (e) { console.error('db read failed', f, e.message); }
  }
 diff -u a/index.js b/index.js
---- a/index.js	2026-11-04 12:19:32.083599451 +0000
-+++ b/index.js	2026-11-04 12:19:32.089468862 +0000
+--- a/index.js	2026-11-05 12:30:49.894601570 +0000
++++ b/index.js	2026-11-05 12:30:50.010601577 +0000
 @@ -13,6 +13,10 @@
  const ALERT = (process.env.ALERT_NUMBER || OWNERS[0] || '').replace(/\D/g, ''); // who receives caught links
  const LINK_RE = /(https?:\/\/|chat\.whatsapp\.com\/|www\.)\S+/gi;
@@ -85,13 +112,77 @@ diff -u a/index.js b/index.js
      if (found) {
        if (ALERT) { // DM the owner just the deleted link(s), nothing else
 diff -u a/items.js b/items.js
---- a/items.js	2026-11-04 12:19:31.415599466 +0000
-+++ b/items.js	2026-11-04 12:19:31.679599460 +0000
-@@ -64,7 +64,9 @@
+--- a/items.js	2026-11-05 12:30:49.674601557 +0000
++++ b/items.js	2026-11-05 12:30:49.678301097 +0000
+@@ -17,38 +17,56 @@
+   I('gloves', 'robbery', '🧤', 'Basic Gloves', 15000, { rob: 5, desc: '+5% rob success (permanent)' }),
+   I('disguise', 'robbery', '🥷', 'Advanced Disguise', 100000, { rob: 10, desc: '+10% rob success (permanent)' }),
+   I('toolkit', 'robbery', '🛠️', 'Professional Toolkit', 500000, { rob: 18, desc: '+18% rob success (permanent)' }),
++  I('ghostcloak', 'robbery', '🕶️', 'Ghost Cloak', 3000000, { rob: 24, desc: '+24% rob success (permanent)' }),
+   I('phantom', 'robbery', '👑', 'Phantom Kit', 10000000, { rob: 30, desc: '+30% rob success (permanent)' }),
+   // protection
+   I('padlock', 'protect', '🔒', 'Padlock', 2000, { stack: true, desc: 'One use: .use padlock = robbers are blocked for 12 hours' }),
+   I('shield', 'protect', '🛡️', 'Small Shield', 50000, { block: 20, desc: '20% chance to block every robbery (permanent)' }),
++  I('guarddog', 'protect', '🐕', 'Guard Dog', 120000, { block: 30, desc: '30% chance to block every robbery (permanent)' }),
+   I('security', 'protect', '🔐', 'Security System', 250000, { block: 40, desc: '40% chance to block every robbery (permanent)' }),
++  I('alarm', 'protect', '🚨', 'Alarm System', 1500000, { block: 50, desc: '50% chance to block every robbery (permanent)' }),
++  I('vaultdoor', 'protect', '🏛️', 'Vault Door', 30000000, { block: 55, desc: '55% chance to block every robbery (permanent)' }),
+   // business (income is paid every 3 minutes)
+   I('smallshop', 'business', '🛒', 'Small Shop', 100000, { income: 300 }),
++  I('cafe', 'business', '☕', 'Coffee Shop', 250000, { income: 780 }),
+   I('food', 'business', '🍔', 'Food Business', 500000, { income: 1600 }),
+   I('dealership', 'business', '🚗', 'Car Dealership', 2000000, { income: 7000, rebirth: 6 }),
+   I('hotel', 'business', '🏨', 'Hotel', 10000000, { income: 38000 }),
++  I('factory', 'business', '🏭', 'Factory', 25000000, { income: 97000 }),
+   I('skyscraper', 'business', '🏢', 'Skyscraper', 50000000, { income: 200000 }),
+   I('privbank', 'business', '🏦', 'Private Bank', 100000000, { income: 420000 }),
++  I('casino', 'business', '🎰', 'Casino', 250000000, { income: 1100000 }),
+   I('island', 'business', '🏝️', 'Private Island', 500000000, { income: 2200000 }),
++  I('spaceport', 'business', '🚀', 'Space Port', 2500000000, { income: 11500000 }),
+   // luxury & collectibles (cars + house unlock at 6 rebirths)
+   I('watch', 'luxury', '⌚', 'Gold Watch', 100000),
+   I('ring', 'luxury', '💍', 'Diamond Ring', 500000),
+   I('sportscar', 'luxury', '🚘', 'Sports Car', 2000000, { rebirth: 6 }),
++  I('painting', 'luxury', '🎨', 'Rare Painting', 5000000),
+   I('supercar', 'luxury', '🏎️', 'Supercar', 25000000, { rebirth: 6 }),
++  I('helicopter', 'luxury', '🚁', 'Helicopter', 50000000, { rebirth: 6 }),
+   I('yacht', 'luxury', '🛥️', 'Luxury Yacht', 100000000),
+   I('mansion', 'luxury', '🏰', 'Private Mansion', 500000000, { rebirth: 6 }),
+   I('throne', 'luxury', '💎', 'Diamond Throne', 1000000000),
++  I('jet', 'luxury', '🛩️', 'Private Jet', 5000000000),
+   I('galaxy', 'luxury', '🌌', 'Galaxy Crown', 10000000000),
++  I('moonbase', 'luxury', '🌙', 'Moon Base', 50000000000),
+   I('negcrown', 'luxury', '👑', "Negatron's Crown", 100000000000),
+   // special
+   I('mystery', 'special', '🧿', 'Mystery Box', 2500000, { stack: true, crate: true, desc: 'Open it with .open mystery — could be anything' }),
+   // crates
++  I('copper', 'crate', '🟤', 'Copper Crate', 10000, { stack: true, crate: true }),
+   I('bronze', 'crate', '🥉', 'Bronze Crate', 50000, { stack: true, crate: true }),
++  I('potion', 'crate', '🧪', 'Potion Crate', 120000, { stack: true, crate: true, desc: 'Open it with .open potion — random potions (some are cursed, gift those!)' }),
+   I('silver', 'crate', '🥈', 'Silver Crate', 250000, { stack: true, crate: true }),
+   I('gold', 'crate', '🥇', 'Gold Crate', 1000000, { stack: true, crate: true }),
++  I('emerald', 'crate', '🟢', 'Emerald Crate', 5000000, { stack: true, crate: true }),
+   I('diamond', 'crate', '💎', 'Diamond Crate', 10000000, { stack: true, crate: true }),
++  I('frost', 'crate', '❄️', 'Frost Crate', 40000000, { stack: true, crate: true }),
+   I('shadow', 'crate', '🌑', 'Shadow Crate', 100000000, { stack: true, crate: true }),
++  I('inferno', 'crate', '🔥', 'Inferno Crate', 400000000, { stack: true, crate: true }),
+   I('negatron', 'crate', '👑', 'Negatron Crate', 1000000000, { stack: true, crate: true }),
++  I('cosmic', 'crate', '🌌', 'Cosmic Crate', 5000000000, { stack: true, crate: true }),
+ ];
+ for (const it of ITEMS) {
+   if (it.crate) it.desc = it.desc || 'Open it with .open ' + it.id + ' — random cash, items or pets';
+@@ -64,7 +82,16 @@
    diamond:  { w: [50, 35, 15], cash: [0.3, 1.8], itemMax: 25000000,    petTier: 'legendary' },
    shadow:   { w: [45, 35, 20], cash: [0.3, 2.0], itemMax: 500000000,   petTier: 'mythic' },
    negatron: { w: [40, 35, 25], cash: [0.3, 2.2], itemMax: 10000000000, petTier: 'divine' },
 -  mystery:  { w: [40, 40, 20], cash: [0.2, 2.0], itemMax: 25000000,    petTier: 'legendary' },
++  // new crates (none of these use the pet crate bonuses, see NO_PET_BONUS in cmd-shop.js)
++  copper:   { w: [80, 20, 0],  cash: [0.1, 1.1], itemMax: 50000,       petTier: null },
++  potion:   { potions: true, w: [0, 0, 0], cash: [0, 0], itemMax: 0, petTier: null },
++  emerald:  { w: [55, 35, 10], cash: [0.3, 1.6], itemMax: 5000000,     petTier: 'epic' },
++  frost:    { w: [50, 35, 15], cash: [0.3, 1.6], itemMax: 50000000,    petTier: 'legendary' },
++  inferno:  { w: [45, 35, 20], cash: [0.3, 1.6], itemMax: 500000000,   petTier: 'mythic' },
++  cosmic:   { w: [40, 35, 25], cash: [0.3, 1.6], itemMax: 10000000000, petTier: 'celestial' },
 +  // mystery was a money printer (buy, open, sell the items back). Old: w [40,40,20] cash [0.2,2.0] itemMax 25M petTier legendary.
 +  // Now it pays back ~53% on average (max ~96% even with stacked pet bonuses), so farming it always loses.
 +  mystery:  { w: [50, 35, 15], cash: [0.1, 1.0], itemMax: 10000000,    petTier: 'epic' },
