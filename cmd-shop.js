@@ -127,7 +127,8 @@ module.exports = {
       const T = `${it.emoji} *${it.name.toUpperCase()}*`;
       L.animate(c, [`${T}\n\n🔐 Cracking it open…`, `${T}\n\n✨ Something is shining inside…`], `${T}\n\n🎉 *YOU GOT:*\n${lines.map(x => '➜ ' + x).join('\n')}\n\n🎒 ${it.name}s left: *${IT.count(u, it.id)}*\n${wal(u)}`);
     }
-    def('open', { usage: 'open <crate|mystery> [amount]' }, c => {
+    def('open', { usage: ['open <crate|mystery> [amount]', 'open <time>  (group admins: open the group for a while)'] }, c => {
+      if (L.groupOpen?.(c)) return; // `.open 10m` / `.open now` = open the group (cmd-grouptime.js). Anything else is the crate command.
       const { qty, it } = qtyAndName(c.args);
       if (!it || !it.crate) return c.reply(`⚠️ Usage: ${P}open <crate>\nCrates: ${IT.ITEMS.filter(i => i.crate).map(i => i.id).join(', ')}`);
       const u = db.user(c.sender);

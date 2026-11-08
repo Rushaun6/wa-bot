@@ -6,7 +6,7 @@ module.exports = {
   register(def, L) {
     const { P, db, rnd } = L;
     const pick = a => a[rnd(0, a.length - 1)];
-    const day = () => new Date().toDateString();
+    const day = () => require('./jtime').dayKey(Date.now()); // Jamaica date: the daily results change at 12:00 AM Jamaica time
     // same number all day for the same person + command, so people can't spam for a better roll
     const score = (n, salt, lo, hi) => lo + parseInt(crypto.createHash('sha1').update(n + day() + salt).digest('hex').slice(0, 8), 16) % (hi - lo + 1);
     const bar = p => { const k = Math.max(0, Math.min(10, Math.round(p / 10))); return '█'.repeat(k) + '░'.repeat(10 - k); };

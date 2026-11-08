@@ -1,13 +1,14 @@
 // RANDOM EVENTS (v2, built for rich players): one random event every 3 hours, plus LUCK HOUR at 12am and 12pm.
 // Everything scales with the player's OWN numbers (% of wallet / bank / net worth, or minutes of passive income), so a billionaire feels it
 // as much as a beginner. Some events warn you first (so you can .deposit), some are races, one is opt-in.
-// Only players seen in the last 7 days take part. Times use the server clock: set TZ (e.g. TZ=Africa/Lagos) so 12am/12pm are yours.
+// Only players seen in the last 7 days take part. All times are JAMAICA time (see jtime.js), whatever timezone the server is in.
 const HOUR = 3600000, MIN = 60000, WEEK = 7 * 24 * HOUR;
 const pick = a => a[Math.floor(Math.random() * a.length)];
 const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const wpick = list => { let r = Math.random() * list.reduce((s, x) => s + x.w, 0); for (const x of list) if ((r -= x.w) <= 0) return x; return list[0]; };
-const nextLuck = now => { const d = new Date(now); for (let add = 0; add < 2; add++) for (const h of [0, 12]) { const t = new Date(d.getFullYear(), d.getMonth(), d.getDate() + add, h, 0, 0).getTime(); if (t > now) return t; } };
+const JT = require('./jtime');
+const nextLuck = now => JT.nextHalfDay(now); // the next 12:00 AM or 12:00 PM in Jamaica
 
 module.exports = {
   category: '🎲 EVENTS',
@@ -165,11 +166,11 @@ module.exports = {
     const tick = async () => {
       if (busy || !L.state.sock) return; busy = true;
       try {
-        const now = Date.now(), s = S(), d = new Date(now), h = d.getHours();
+        const now = Date.now(), s = S(), jp = JT.parts(now), h = jp.h; // jp = the time in Jamaica
         if (s.active && now >= s.active.until) await endActive();
         for (const p of s.pending.filter(p => now >= p.at)) { s.pending = s.pending.filter(x => x !== p); const e = EVENTS.find(x => x.id === p.id); if (e) await runNow(e); }
         if (now >= s.nextRandom) { s.nextRandom = now + 3 * HOUR; db.save(); await fire(chooseRandom()); }
-        if ((h === 0 || h === 12) && d.getMinutes() < 10) { const key = d.toDateString() + '-' + h; if (s.luckKey !== key) { s.luckKey = key; db.save(); await luckHour(h === 0 ? '🌙 12:00 AM' : '☀️ 12:00 PM'); } }
+        if ((h === 0 || h === 12) && jp.m < 10) { const key = jp.key + '-' + h; if (s.luckKey !== key) { s.luckKey = key; db.save(); await luckHour(h === 0 ? '🌙 12:00 AM Jamaica time' : '☀️ 12:00 PM Jamaica time'); } }
       } catch (e) { console.error('events tick failed:', e.message); } finally { busy = false; }
     };
     if (!module.exports._started) { module.exports._started = true; setInterval(tick, 20000).unref(); }
@@ -180,7 +181,7 @@ module.exports = {
       const bst = k => u.ab?.[k] && now < u.ab[k].until ? `×${u.ab[k].x} for ${left(u.ab[k].until - now)}` : 'none';
       const live = a ? `\n\n🔴 *LIVE NOW:* ${a.type === 'grab' ? `Supply drop, type ${P}grab` : a.type === 'solve' ? `Math race: ${a.q} (${P}solve <answer>)` : `Double or nothing, type ${P}evjoin`} · ${left(Math.max(0, a.until - now))} left` : '';
       const recent = s.log.slice(0, 3).map(l => `${l.emoji} ${l.name} · ${left(now - l.at)} ago`).join('\n') || 'none yet';
-      c.reply(`🎲 *RANDOM EVENTS*\n\n⏰ Next event: in *${left(Math.max(0, s.nextRandom - now))}*\n🍀 Next LUCK HOUR (12am / 12pm): in *${left(nextLuck(now) - now)}*${live}\n\n🍀 Your luck boost: ${bst('luck')}\n💸 Your income boost: ${bst('cash')}\n\n*Recent*\n${recent}\n\nSee all: ${P}eventlist`);
+      c.reply(`🎲 *RANDOM EVENTS*\n\n⏰ Next event: in *${left(Math.max(0, s.nextRandom - now))}*\n🍀 Next LUCK HOUR (12am / 12pm Jamaica time): in *${left(nextLuck(now) - now)}*${live}\n\n🍀 Your luck boost: ${bst('luck')}\n💸 Your income boost: ${bst('cash')}\n\n*Recent*\n${recent}\n\nSee all: ${P}eventlist`);
     });
     def('eventlist', { usage: 'eventlist' }, c => c.reply(`🎲 *ALL EVENTS* (one every 3 hours)\n\n` + EVENTS.map(e => `${e.emoji} *${e.name}*${e.warn ? ' ⚠️' : ''}${e.live ? ' 🔴' : ''}\n   ${e.about}`).join('\n') + `\n\n⚠️ = you get a warning first (use ${P}dep all)\n🔴 = live: be quick`));
     def('triggerevent', { o: true, usage: 'triggerevent [id]' }, async c => {

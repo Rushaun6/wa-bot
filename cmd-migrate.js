@@ -14,7 +14,7 @@ module.exports = {
     const M = db.data.migrations;
     let job = null, lastEnd = 0;
 
-    const budget = () => { const day = new Date().toISOString().slice(0, 10); if (M.day !== day) { M.day = day; M.used = 0; M.created = 0; } return Math.max(0, DAILY_MAX - M.used); };
+    const budget = () => { const day = require('./jtime').dayKey(Date.now()); if (M.day !== day) { M.day = day; M.used = 0; M.created = 0; } return Math.max(0, DAILY_MAX - M.used); };
     const isAdminOf = (c, meta) => !!meta?.participants?.find(p => aliases(p).includes(c.senderJid))?.admin;
     const botIds = () => [nj(L.state.sock.user.id), nj(L.state.sock.user.lid || '')];
     const botAdmin = meta => !!meta?.participants?.find(p => aliases(p).some(a => botIds().includes(a)))?.admin;

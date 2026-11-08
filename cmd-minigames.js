@@ -10,7 +10,7 @@ module.exports = {
     L.mini = { draws, ttt, hang }; // exposed for tests
 
     function prize(n, amt) { // pays up to the daily cap, returns how much was actually paid
-      const u = db.user(n), day = new Date().toISOString().slice(0, 10);
+      const u = db.user(n), day = require('./jtime').dayKey(Date.now()); // daily cap resets at 12:00 AM Jamaica time
       if (u.prizeDay !== day) { u.prizeDay = day; u.prizeAmt = 0; }
       const paid = Math.max(0, Math.min(amt, DAILY_CAP - (u.prizeAmt || 0)));
       u.wallet += paid; u.prizeAmt = (u.prizeAmt || 0) + paid; db.save();

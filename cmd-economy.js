@@ -3,7 +3,7 @@ module.exports = {
   category: '💰 ECONOMY',
   register(def, L) {
     const { P, db, m, wal, result, rnd, left, parseAmt, bet } = L;
-    const PT = L.pets, IT = L.items;
+    const PT = L.pets, IT = L.items, JT = require('./jtime');
     const pick = a => a[rnd(0, a.length - 1)];
     const PAY_MIN = Number(process.env.PAY_MIN || 45000); // the person you pay must already have this much
     const boosted = (u, type, amt) => Math.floor(amt * PT.boost(u, type) * L.abOf(u, 'cash')); // pet abilities (+%) and the admin-abuse 2x cash event
@@ -16,9 +16,9 @@ module.exports = {
     });
 
     def('daily', {}, c => {
-      const u = db.user(c.sender), now = Date.now(), DAY = 86400000;
-      if (now - u.lastDaily < DAY) return c.reply(`🎁 *DAILY REWARD*\n\n⏳ Already claimed. Come back in *${left(DAY - (now - u.lastDaily))}*.`);
-      u.streak = u.lastDaily && now - u.lastDaily < 2 * DAY ? u.streak + 1 : 1;
+      const u = db.user(c.sender), now = Date.now(), today = JT.dayNum(now), lastDay = u.lastDaily ? JT.dayNum(u.lastDaily) : -1; // resets at 12:00 AM Jamaica time, not 24h after your last claim
+      if (lastDay === today) return c.reply(`🎁 *DAILY REWARD*\n\n⏳ Already claimed today. It resets at *12:00 AM Jamaica time* (in *${left(JT.nextMidnight(now) - now)}*).`);
+      u.streak = lastDay === today - 1 ? (u.streak || 0) + 1 : 1; // the streak continues only if you claimed yesterday
       const base = 200 + Math.min(u.streak - 1, 14) * 50, reward = boosted(u, 'daily', base);
       u.wallet += reward; u.lastDaily = now; db.save();
       L.animate(c, ['🎁 *DAILY REWARD*\n\n🎁 Opening your reward…'], `🎁 *DAILY REWARD*\n\n✅ Claimed *+${m(reward)}*${reward > base ? ` _(pet bonus +${m(reward - base)})_` : ''}\n🔥 Streak: *${u.streak}* day(s) (max bonus at day 15)\n${wal(u)}`);
@@ -89,6 +89,7 @@ module.exports = {
       if (me.wallet < 100) return c.reply(`🥷 *ROB*\n\n⚠️ You need at least ${m(100)} to try.`);
       if (v.wallet < 200) return c.reply('🥷 *ROB*\n\nThey are too broke to be worth it.');
       me.robCd = frenzy ? 0 : now + 10 * 60000;
+      L.autoPad?.(v); // auto padlock: puts the lock back on first if it ran out
       if (!op && now < v.padlock) { db.save(); return c.reply(`🥷 *ROB*\n\n🔒 @${t.n} has a padlock. Robbery failed.`, [t.jid]); }
       const frames = ['🥷 *ROB*\n\n🥷 Sneaking up on them…', '🥷 *ROB*\n\n👀 Reaching for the wallet…'];
       const fail = why => { const f = Math.floor(Math.min(Math.max(0, me.wallet), rnd(100, 300)) * (1 - PT.ab(me, 'fine') / 100)); me.wallet -= f; db.save(); L.animate(c, frames, `🥷 *ROB*\n\n${why}\nFine: *-${m(f)}*\n${wal(me)}`, [t.jid]); };
@@ -127,8 +128,8 @@ module.exports = {
       IT.take(me, 'picklock'); // used up whether it works or not
       const left1 = IT.count(me, 'picklock');
       if (rnd(1, 100) <= Math.min(95, 50 + PT.ab(me, 'lockpick'))) {
-        v.padlock = 0; db.save();
-        return L.animate(c, ['🔓 *PICKLOCK*\n\n🔧 Working the lock…'], `🔓 *PICKLOCK SUCCESS*\n\nYou broke @${t.n}'s padlock! They're open to robbery now.\n🎒 Picklocks left: *${left1}*`, [t.jid]);
+        v.padlock = 0; const relocked = L.autoPad?.(v); db.save();
+        return L.animate(c, ['🔓 *PICKLOCK*\n\n🔧 Working the lock…'], `🔓 *PICKLOCK SUCCESS*\n\nYou broke @${t.n}'s padlock! ${relocked ? '🔁 But their *auto padlock* locked it right back on.' : "They're open to robbery now."}\n🎒 Picklocks left: *${left1}*`, [t.jid]);
       }
       db.save();
       L.animate(c, ['🔓 *PICKLOCK*\n\n🔧 Working the lock…'], `🔒 *PICKLOCK FAILED*\n\nThe lock on @${t.n} held strong and your picklock snapped.\n🎒 Picklocks left: *${left1}*`, [t.jid]);

@@ -165,7 +165,10 @@ async function start() {
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('messages.upsert', u => onMessage(sock, u));
   sock.ev.on('groups.update', u => u.forEach(g => metaCache.delete(g.id)));
-  sock.ev.on('group-participants.update', u => metaCache.delete(u.id));
+  sock.ev.on('group-participants.update', u => {
+    metaCache.delete(u.id);
+    for (const h of botState.joinHooks || []) { try { h(sock, u); } catch (e) { console.error('join hook failed:', e?.message || e); } } // .intro (cmd-intro.js)
+  });
   sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
     if (connection === 'open') { status = 'online'; retry = 0; console.log('✅ Connected as', num(sock.user.id)); }
     if (connection === 'close') {
