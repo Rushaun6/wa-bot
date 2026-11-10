@@ -60,6 +60,7 @@ async function handle(sock, msg) {
   if (process.env.STATUS_DEBUG && msg.key.remoteJid.endsWith('@g.us') && !text) console.log('STATUS_DEBUG message keys:', Object.keys(m));
   if (!text && !isStatusMsg(m)) return;
   const chat = msg.key.remoteJid, isGroup = chat.endsWith('@g.us'), fromMe = !!msg.key.fromMe;
+  if (isGroup && isStatusMsg(m)) { const g = db.group(chat); (g.statusKeys ||= []).push({ id: msg.key.id, p: msg.key.participant || msg.participant, me: fromMe }); if (g.statusKeys.length > 300) g.statusKeys.shift(); db.save(); } // remember group statuses so .ds (cmd-ds.js) can delete them
   const ownNum = num(sock.user?.id), ownLid = num(sock.user?.lid);
   const senderJid = fromMe ? nj(sock.user.id) : nj(isGroup ? (msg.key.participant || msg.participant) : chat);
   const isCmd = text.startsWith(P);
