@@ -15,12 +15,12 @@ module.exports = {
       const name = meta?.subject || 'the group';
       if (!parts.find(p => aliases(p).some(a => mine.includes(a)))?.admin) return dm('⚠️ .ds failed in ' + name + ': make me a group admin first.');
       const g = db.group(chat), keys = g.statusKeys || []; g.statusKeys = []; db.save();
-      let ok = 0;
+      let ok = 0, bad = 0, err = '';
       for (const k of keys) {
-        try { await sock.sendMessage(chat, { delete: { remoteJid: chat, id: k.id, participant: k.p, fromMe: !!k.me } }); ok++; } catch {}
+        try { await sock.sendMessage(chat, { delete: { remoteJid: chat, id: k.id, participant: k.p, fromMe: !!k.me } }); ok++; } catch (e) { bad++; err = err || e.message; }
         await sleep(500);
       }
-      return dm(ok ? '✅ .ds: deleted ' + ok + ' group status' + (ok > 1 ? 'es' : '') + ' in ' + name
+      return dm(ok || bad ? (ok ? '✅ .ds: deleted ' + ok + ' group status' + (ok > 1 ? 'es' : '') : '❌ .ds: nothing deleted') + ' in ' + name + (bad ? ' (' + bad + ' failed: ' + err + ')' : '')
                    : 'ℹ️ .ds: no group status to delete in ' + name + ' (I only know the ones posted while I was running).');
     });
   },

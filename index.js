@@ -15,7 +15,8 @@ const LINK_RE = /(https?:\/\/|chat\.whatsapp\.com\/|www\.)\S+/gi;
 
 // WhatsApp group status posts have no text, so they get their own check. These field names are a best guess:
 // start the bot with STATUS_DEBUG=1, post a group status, and the log shows the real key if this needs changing.
-const isStatusMsg = m => !!(m.groupStatusMessage || m.groupStatusMessageV2 || m.groupStatusMentionMessage || m.statusMentionMessage || m.statusAddYours);
+// Baileys 6.7.18 doesn't know the group status type: it arrives as an empty message holding only messageContextInfo, so that counts as a status too.
+const isStatusMsg = m => !!(m.groupStatusMessage || m.groupStatusMessageV2 || m.groupStatusMentionMessage || m.statusMentionMessage || m.statusAddYours) || (Object.keys(m).length === 1 && !!m.messageContextInfo);
 
 // ---------- audit: records every balance change a command causes ----------
 const AUDIT_MIN = Number(process.env.AUDIT_MIN || 100000); // changes this big (up or down) go in the audit log
