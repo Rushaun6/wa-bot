@@ -65,7 +65,7 @@ async function handle(sock, msg) {
   const ownNum = num(sock.user?.id), ownLid = num(sock.user?.lid);
   const senderJid = fromMe ? nj(sock.user.id) : nj(isGroup ? (msg.key.participant || msg.participant) : chat);
   const isCmd = text.startsWith(P);
-  const needMeta = isGroup && (isCmd || db.group(chat).antilink || db.group(chat).autodelStatus || (/^\d{1,2}$/.test(text) && botState.hasPick?.(chat)));
+  const needMeta = isGroup && (isCmd || db.group(chat).antilink || db.group(chat).autodelStatus || db.group(chat).kickStatus || db.group(chat).kickLink || (/^\d{1,2}$/.test(text) && botState.hasPick?.(chat)));
   const meta = needMeta ? await getMeta(sock, chat) : null;
   const sender = fromMe ? ownNum : resolveNum(meta, senderJid);
   if (!sender) return;
@@ -83,17 +83,30 @@ async function handle(sock, msg) {
     // a plain number ("2") answers a menu such as the .song results; cmd-song.js sets botState.onNumberReply
     if (/^\d{1,2}$/.test(text) && botState.onNumberReply && (isOwner || !db.data.banned.includes(sender)) &&
         await botState.onNumberReply({ sock, msg, chat, sender, senderJid, isGroup, text, reply }).catch(() => false)) return;
+    // .statuskick on: anyone (except group admins and bot admins) who posts a group status is deleted, kicked and blacklisted
+    if (isGroup && !fromMe && db.group(chat).kickStatus && botIsAdmin && !isGroupAdmin && !isBotAdmin && isStatusMsg(m)) {
+      await sock.sendMessage(chat, { delete: msg.key }).catch(() => {});
+      await sock.groupParticipantsUpdate(chat, [senderJid], 'remove').catch(e => console.error('status kick failed:', e?.message || e));
+      const bl = (db.data.blacklist ||= []); if (!bl.includes(sender)) { bl.push(sender); db.save(); }
+      if (ALERT) sock.sendMessage(ALERT + '@s.whatsapp.net', { text: `🚫 Kicked and blacklisted +${sender} from ${meta?.subject || 'a group'} for posting a group status.\nWrong person? Send ${P}unbl ${sender}` }).catch(() => {});
+      return;
+    }
     // .groupstatus on: delete group status posts from members (group admins exempt)
     if (isGroup && !fromMe && db.group(chat).autodelStatus && botIsAdmin && !isGroupAdmin && isStatusMsg(m)) {
       await sock.sendMessage(chat, { delete: msg.key }).catch(() => {});
       return;
     }
-    const found = isGroup && db.group(chat).antilink && !isGroupAdmin && botIsAdmin ? text.match(LINK_RE) : null;
+    const found = isGroup && (db.group(chat).antilink || db.group(chat).kickLink) && !isGroupAdmin && botIsAdmin ? text.match(LINK_RE) : null;
     if (found) {
       if (ALERT) { // DM the owner just the deleted link(s), nothing else
         await sock.sendMessage(ALERT + '@s.whatsapp.net', { text: [...new Set(found)].join('\n') }).catch(e => console.error('link forward failed:', e?.message || e));
       }
       await sock.sendMessage(chat, { delete: msg.key }).catch(() => {});
+      if (db.group(chat).kickLink && !isBotAdmin) { // .linkkick on: whoever posts a link is also kicked
+        await sock.groupParticipantsUpdate(chat, [senderJid], 'remove').catch(e => console.error('link kick failed:', e?.message || e));
+        if (ALERT) sock.sendMessage(ALERT + '@s.whatsapp.net', { text: `🚫 Kicked +${sender} from ${meta?.subject || 'a group'} for posting a link.\nBlacklist them: ${P}bl ${sender}` }).catch(() => {});
+        return;
+      }
       await reply(`🚫 *ANTILINK*\n\n@${sender} links are not allowed here.`, [senderJid]);
     }
     return;
