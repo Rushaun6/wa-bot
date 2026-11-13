@@ -61,7 +61,7 @@ module.exports = {
       const u = db.user(c.sender), now = Date.now(), CD = 3 * 60000;
       if (now - u.lastBeg < CD) return c.reply(`🙏 *BEG*\n\n⏳ Try again in *${left(CD - (now - u.lastBeg))}*.`);
       u.lastBeg = now;
-      const eq = PT.equipped(u).map(e => e.pet), owned = IT.owned(u).map(o => o.item);
+      const eq = PT.equipped(u).map(e => e.pet).filter(p => !p.owners), owned = IT.owned(u).map(o => o.item); // private pets are never named in the group
       const showy = owned.filter(i => i.cat === 'luxury'), biz = owned.filter(i => i.cat === 'business');
       const frames = ['🙏 *BEG*\n\n🙏 Holding out your hat…'];
       if (rnd(1, 100) <= Math.min(95, Math.round(65 + (L.abOf(u, 'luck') - 1) * 15))) { // luck event makes begging luckier

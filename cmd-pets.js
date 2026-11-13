@@ -8,7 +8,7 @@ module.exports = {
     const tierLine = p => `${PT.TIERS[p.tier].icon} ${PT.TIERS[p.tier].label}`;
     const autoEquip = (u, id) => { if (u.equipped.length < PT.slots(u) && !u.equipped.includes(id)) { u.equipped.push(id); return true; } return false; };
     const nameArg = c => c.args.filter(a => !a.startsWith('@'));
-    const lookup = (c, from = 0) => PT.find(nameArg(c).slice(from).join(' '));
+    const lookup = (c, from = 0) => PT.find(nameArg(c).slice(from).join(' '), c.sender); // private pets only match for their owner
 
     // admin-abuse "shop" event: the player sees a special stock for a while
     const stockFor = u => (u && u.abShop && Date.now() < u.abShop.until) ? { stock: u.abShop.ids.map(id => PT.BY_ID[id]).filter(Boolean), restockIn: u.abShop.until - Date.now(), abuse: true } : PT.shop();
@@ -64,11 +64,12 @@ module.exports = {
 
     def(['ownedpet', 'ownedpets', 'pets', 'mypets'], { usage: 'ownedpet [@user]' }, c => {
       const t = c.target(), n = t ? t.n : c.sender, u = db.user(n);
-      if (!u.pets.length) return c.reply(`🐾 *${t ? 'THEIR' : 'YOUR'} PETS*\n\nNo pets yet. Check the ${P}pet shop!`, t ? [t.jid] : []);
+      const shown = n === c.sender ? u.pets : u.pets.filter(o => !PT.BY_ID[o.id]?.owners); // private pets are only visible to their owner
+      if (!shown.length) return c.reply(`🐾 *${t ? 'THEIR' : 'YOUR'} PETS*\n\nNo pets yet. Check the ${P}pet shop!`, t ? [t.jid] : []);
       const line = o => { const p = PT.BY_ID[o.id]; return `${p.emoji} *${p.name}* — ${PT.TIERS[p.tier].icon} ${PT.TIERS[p.tier].label} • Lv ${o.lvl}/3\n     ${PT.describe(p, o.lvl).replace(/\n\s+/g, ' • ')}`; };
       const bp = PT.bankPets(u)[0], bankLine = bp ? `\n🏦 ${bp.pet.emoji} ${bp.pet.name} payout in *${left(Math.max(0, (u.cr7At || Date.now()) + bp.pet.ab.find(a => a.type === 'bankmult').hours * 3600000 - Date.now()))}*` : '';
-      const eq = u.pets.filter(o => u.equipped.includes(o.id)), rest = u.pets.filter(o => !u.equipped.includes(o.id));
-      c.reply(`🐾 *${t ? 'PETS OF @' + n : 'YOUR PETS'}*\n\n┏━ 🔁 Rebirths: *${u.rebirths}/${PT.MAX_REBIRTH}*\n│ 🎒 Equipped: *${eq.length}/${PT.slots(u)}* slots\n┗━ 💸 Income: *${m(PT.income(u))}* / ${PT.INCOME_MIN} min (auto-paid)${bankLine}\n\n*✅ Equipped*\n${eq.map(line).join('\n') || '_none_'}${rest.length ? `\n\n*📦 In storage*\n${rest.map(line).join('\n')}` : ''}`, t ? [t.jid] : []);
+      const eq = shown.filter(o => u.equipped.includes(o.id)), rest = shown.filter(o => !u.equipped.includes(o.id)), inc = n === c.sender ? PT.income(u) : Math.floor(eq.reduce((s, o) => s + PT.BY_ID[o.id].income * PT.mult(o.lvl), 0));
+      c.reply(`🐾 *${t ? 'PETS OF @' + n : 'YOUR PETS'}*\n\n┏━ 🔁 Rebirths: *${u.rebirths}/${PT.MAX_REBIRTH}*\n│ 🎒 Equipped: *${eq.length}/${PT.slots(u)}* slots\n┗━ 💸 Income: *${m(inc)}* / ${PT.INCOME_MIN} min (auto-paid)${bankLine}\n\n*✅ Equipped*\n${eq.map(line).join('\n') || '_none_'}${rest.length ? `\n\n*📦 In storage*\n${rest.map(line).join('\n')}` : ''}`, t ? [t.jid] : []);
     });
     def('equip', { usage: 'equip <name>' }, c => {
       const pet = lookup(c); if (!pet) return c.reply(`⚠️ Usage: ${P}equip <pet name>  (see ${P}ownedpet)`);
@@ -108,7 +109,7 @@ module.exports = {
       const t = c.target(); if (!t) return c.reply(`🐾 *ROB PET*\n\n⚠️ Usage: ${P}robpet @user\n💰 Costs ${m(ROBPET_FEE)} every try • ${ROBPET_CHANCE}% chance`);
       if (t.n === c.sender) return c.reply("🤦 You can't rob yourself.");
       const me = db.user(c.sender), v = db.user(t.n);
-      const loot = v.pets.filter(o => !PT.owned(me, o.id));
+      const loot = v.pets.filter(o => !PT.owned(me, o.id) && !PT.BY_ID[o.id]?.owners); // private pets can't be stolen
       if (!loot.length) return c.reply(`🐾 *ROB PET*\n\n@${t.n} has no pets you could steal.`, [t.jid]);
       if (me.wallet < ROBPET_FEE) return c.reply(`🐾 *ROB PET*\n\n⚠️ You need *${m(ROBPET_FEE)}* in your wallet to try.`);
       if (L.cooldown(c, 'robpet', 30 * 60000)) return;
@@ -126,7 +127,8 @@ module.exports = {
 
     // ---- admins (owner / bot admins)
     def('spawnpet', { ba: true, usage: 'spawnpet @user <pet>' }, async c => {
-      const t = c.target(); const pet = lookup(c);
+      const t = c.target(); const pet = PT.findAny(nameArg(c).slice(1).join(' ') || nameArg(c).join(' '));
+      if (pet?.owners && t && !pet.owners.includes(t.n)) return c.reply(`🐾 ${pet.emoji} *${pet.name}* is private and can only belong to its owner.`);
       if (!t || !pet) return c.reply(`🐾 *SPAWN PET*\n\n⚠️ Usage: ${P}spawnpet @user <pet name>`);
       const u = db.user(t.n);
       if (PT.owned(u, pet.id)) return c.reply(`🐾 @${t.n} already owns a ${pet.emoji} *${pet.name}*.`, [t.jid]);
@@ -227,8 +229,46 @@ module.exports = {
         await sleep(1500);
       }
     };
+    // private pets: every owner gets theirs automatically (once their account exists)
+    const grantSecret = () => {
+      for (const pet of PT.SECRET) for (const n of pet.owners) {
+        const u = db.data.users[n]; if (!u || !Array.isArray(u.pets) || PT.owned(u, pet.id)) continue;
+        u.pets.push({ id: pet.id, lvl: 0 }); autoEquip(u, pet.id); db.save();
+      }
+    };
+    // heistall (Captain Odegaard): every 5 min, takes a % from every member of the owner's groups (guard pets can block it).
+    // The group message never names the pet, so nobody learns which pet it is.
+    const heistTick = async () => {
+      const sock = L.state.sock; if (!sock) return;
+      const heisters = Object.entries(db.data.users).filter(([, u]) => PT.heisters(u).length);
+      if (!heisters.length) return;
+      let all; try { all = Object.values(await sock.groupFetchAllParticipating()); } catch (e) { console.error('heist: could not list groups:', e?.message || e); return; }
+      const now = Date.now();
+      for (const [n, u] of heisters) {
+        const rng = PT.heisters(u).flatMap(e => e.pet.ab.filter(a => a.type === 'heistall').map(a => [a.min * PT.mult(e.lvl), a.max * PT.mult(e.lvl)]));
+        const lo = rng.reduce((s, x) => s + x[0], 0), hi = rng.reduce((s, x) => s + x[1], 0);
+        for (const meta of all) {
+          if (db.data.groups[meta.id]?.economy === false) continue;
+          const me = meta.participants.find(p => L.resolveNum(meta, p.id) === n); if (!me) continue;
+          let total = 0, hit = 0;
+          for (const p of meta.participants) {
+            const vn = L.resolveNum(meta, p.id); if (vn === n) continue;
+            const v = db.data.users[vn]; if (!v || !v.played || v.wallet < 1000 || v.padlock > now) continue;
+            if (rnd(1, 100) <= PT.guardChance(v)) continue;
+            const amt = Math.floor(v.wallet * (lo + Math.random() * (hi - lo)) / 100); if (amt < 1) continue;
+            v.wallet -= amt; u.wallet += amt; total += amt; hit++;
+          }
+          if (!hit) continue;
+          db.save();
+          await sock.sendMessage(meta.id, { text: `🕵️ *HEIST*\n\n@${n} quietly skimmed *${m(total)}* from *${hit}* member${hit > 1 ? 's' : ''}!`, mentions: [me.id] }).catch(() => {});
+          await sleep(1500);
+        }
+      }
+    };
+    setTimeout(grantSecret, 20000).unref(); setInterval(grantSecret, 30000).unref();
+    setInterval(() => heistTick().catch(e => console.error('heist tick failed:', e?.message || e)), 5 * 60000).unref();
     setInterval(incomeTick, PT.INCOME_MIN * 60000).unref();
     setInterval(() => pigeonTick().catch(e => console.error('pigeon tick failed:', e?.message || e)), 5 * 60000).unref();
-    L.petTicks = { incomeTick, pigeonTick, notifyRestock, cr7Tick };
+    L.petTicks = { incomeTick, pigeonTick, heistTick, grantSecret, notifyRestock, cr7Tick };
   },
 };

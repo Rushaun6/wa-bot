@@ -1,4 +1,4 @@
-// gamble, dice, slots, duel
+// gamble (coin flip, roulette), flip, dice, slots, duel
 module.exports = {
   category: '🎲 GAMBLING',
   register(def, L) {
@@ -10,20 +10,38 @@ module.exports = {
 
     const pending = new Map(); // duels
 
-    def('gamble', { usage: ['gamble <amt>', 'gamble red <amt>', 'gamble black <amt>'] }, c => {
-      const u = db.user(c.sender); const a0 = (c.args[0] || '').toLowerCase();
-      if (a0 === 'red' || a0 === 'black') {
-        const amt = bet(c, c.args[1]); if (!amt || L.cooldown(c, 'game', 3000)) return;
-        const n = rnd(0, 36), color = n === 0 ? 'green' : REDS.has(n) ? 'red' : 'black';
-        const em = { red: '🔴', black: '⚫', green: '🟢' }[color];
-        const net = color === a0 ? amt : -amt; u.wallet += net; db.save();
-        L.animate(c, [`🎡 *ROULETTE*\n\n🎡 Spinning the wheel…\n🎯 You bet ${a0} • ${m(amt)}`, `🎡 *ROULETTE*\n\n⚪ The ball is bouncing…`], `🎡 *ROULETTE*\n\nThe ball landed on ${em} *${n}* (${color})\nYou bet ${a0}\n\n${result(amt, net, 2, u)}`);
-      } else {
-        const amt = bet(c, c.args[0]); if (!amt || L.cooldown(c, 'game', 3000)) return;
-        const win = rnd(1, 100) <= 48, net = win ? amt : -amt; u.wallet += net; db.save();
-        L.animate(c, [`🪙 *COIN FLIP* 🪙\n\n🪙 Flipping…`, `🪙 *COIN FLIP* 🪙\n\n💫 In the air…`], `🪙 *COIN FLIP* 🪙\n\n${win ? '✨ It landed on your side! ✨' : '💔 It landed on the other side.'}\n\n${result(amt, net, 2, u)}`);
-      }
+    // ---- roulette: red / black / even / odd pay 2x, green (the 0) pays 36x. Same wheel as before (0-36).
+    const ROUL = { red: 2, black: 2, even: 2, odd: 2, green: 36 };
+    function roulette(c, pick, a) {
+      const amt = bet(c, a); if (!amt || L.cooldown(c, 'game', 3000)) return; const u = db.user(c.sender);
+      const n = rnd(0, 36), color = n === 0 ? 'green' : REDS.has(n) ? 'red' : 'black';
+      const win = pick === 'green' ? n === 0 : pick === 'even' ? n !== 0 && n % 2 === 0 : pick === 'odd' ? n % 2 === 1 : color === pick;
+      const mult = ROUL[pick], net = win ? amt * (mult - 1) : -amt; u.wallet += net; db.save();
+      const em = { red: '🔴', black: '⚫', green: '🟢' }[color], par = n === 0 ? '' : n % 2 ? ', odd' : ', even';
+      L.animate(c, [`🎡 *ROULETTE*\n\n🎡 Spinning the wheel…\n🎯 You bet ${pick} • ${m(amt)}`, `🎡 *ROULETTE*\n\n⚪ The ball is bouncing…`], `🎡 *ROULETTE*\n\nThe ball landed on ${em} *${n}* (${color}${par})\nYou bet ${pick}\n\n${result(amt, net, mult, u)}`);
+    }
+
+    // ---- coin flip: the more you flip today, the luckier you get (resets every day).
+    // Kept human: a play only counts if it is 5s+ after the last counted one, at most 200 count per day,
+    // and the chance is capped. At LUCK_MAX above 50% a player wins money on average, set it to 0.5 to keep the house even.
+    const LUCK_BASE = 0.48, LUCK_STEP = 0.0005, LUCK_MAX = 0.54, LUCK_PLAYS = 200, LUCK_GAP = 5000;
+    const dayKey = () => new Intl.DateTimeFormat('en-CA', { timeZone: process.env.BOT_TZ || 'America/Jamaica' }).format(new Date());
+    function flip(c, a) {
+      const amt = bet(c, a); if (!amt || L.cooldown(c, 'game', 3000)) return; const u = db.user(c.sender), day = dayKey();
+      let fl = u.flipLuck; if (!fl || fl.d !== day) fl = u.flipLuck = { d: day, n: 0, t: 0 };
+      const chance = Math.min(LUCK_MAX, LUCK_BASE + LUCK_STEP * fl.n);
+      const win = rnd(1, 10000) <= Math.round(chance * 10000);
+      if (fl.n < LUCK_PLAYS && Date.now() - fl.t >= LUCK_GAP) { fl.n++; fl.t = Date.now(); }
+      const net = win ? amt : -amt; u.wallet += net; db.save();
+      L.animate(c, [`🪙 *COIN FLIP* 🪙\n\n🪙 Flipping…`, `🪙 *COIN FLIP* 🪙\n\n💫 In the air…`], `🪙 *COIN FLIP* 🪙\n\n${win ? '✨ It landed on your side! ✨' : '💔 It landed on the other side.'}\n\n${result(amt, net, 2, u)}\n🍀 Luck today: *${(chance * 100).toFixed(1)}%* · ${fl.n} play${fl.n === 1 ? '' : 's'}`);
+    }
+
+    def('gamble', { usage: ['gamble <amt|all>', 'gamble red|black <amt|all>', 'gamble even|odd <amt|all>', 'gamble green <amt|all>'] }, c => {
+      const a0 = (c.args[0] || '').toLowerCase();
+      if (ROUL[a0]) return roulette(c, a0, c.args[1]);
+      flip(c, c.args[0]);
     });
+    def(['flip', 'coinflip', 'cf'], { usage: 'flip <amt|all>' }, c => flip(c, c.args.find(x => /^(all|\d)/i.test(x))));
 
     def('dice', { usage: 'dice <amt>' }, c => {
       const amt = bet(c, c.args[0]); if (!amt || L.cooldown(c, 'game', 3000)) return; const u = db.user(c.sender);

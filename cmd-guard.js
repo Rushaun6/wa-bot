@@ -5,7 +5,7 @@ module.exports = {
   category: '🛡️ GROUP PROTECTION',
   register(def, L) {
     const { P, db, num, nj, aliases, getMeta, resolveNum, sleep, OWNERS } = L;
-    const list = () => (db.data.blacklist ||= []);
+    const list = () => (db.data.events.blacklist ||= []);
     const protectedNum = (c, n) => OWNERS.includes(n) || db.data.owners.includes(n) || n === num(c.sock.user?.id) || n === num(c.sock.user?.lid);
     const who = c => { // reply / @mention, or a typed number
       const t = c.target();
