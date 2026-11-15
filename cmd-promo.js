@@ -1,72 +1,110 @@
-// .promote <your-group-link> <their-group-link>  (owner only)
-// Joins THEIR group, posts YOUR link with a hidden tag-all, then leaves.
-// If their group needs admin approval, the bot waits (in the background) until it is let in.
+// 📣 .promotegroupstatus (owner / bot admins): promote your group with a GROUP STATUS inside groups you have permission to post in.
+// You queue invite links of those groups. For each one the bot joins (waiting for approval if the group needs it, with no time limit),
+// posts the status (your group link), leaves, and clears that chat from its own list. Progress is DM'd to whoever queued the link.
+// Joining is paced (one group per ~45s) so the number doesn't get flagged: that is not a cap, the queue can be any size.
+// Works on your current Baileys (no fork): the group status is a "groupStatusMessageV2" envelope (Message field 103) sent with relayMessage.
+// Baileys 6.7.18 doesn't know that field, so it is added to the encoder at runtime. This has NOT been confirmed against live WhatsApp,
+// so queueing is locked until you run ".promotegroupstatus test" in a group of yours, see it show up as a group status, and send
+// ".promotegroupstatus ok". Set GROUP_STATUS_API=flag|wrap if you ever move to a library with its own group status helper.
 module.exports = {
-  category: '👑 OWNER',
+  category: '📣 PROMO',
   register(def, L) {
-    const { left, aliases, nj, sleep } = L;
-    const DEFAULT_LINK = process.env.PROMO_LINK || '';             // used only when you give just ONE link
-    const WAIT_MS = (Number(process.env.PROMO_WAIT_MIN) || 60) * 60000; // how long to wait for approval
-    const POLL_MS = process.env.PROMO_POLL_MS ? Number(process.env.PROMO_POLL_MS) : 30000;
-    const COOLDOWN = 3 * 60000; // WhatsApp flags accounts that join/leave groups rapidly
-    const MAX_WAITING = 3;
-    let last = 0, waiting = 0;
-    const T = '📢 *PROMOTE*';
-    const textFor = link => (process.env.PROMO_TEXT ? process.env.PROMO_TEXT.replace('{link}', link) : `📢 *Join our group!*\n\n🔗 ${link}`);
+    const { P, db, sleep, rnd } = L;
+    const TICK = 45000;
+    const st = () => (db.data.events.promo ||= { link: '', text: '', queue: [], done: 0 });
+    const codeOf = s => (/chat\.whatsapp\.com\/([A-Za-z0-9]{10,})/.exec(s || '') || [])[1];
+    const body = s => { const t = (s.text || '📣 Join my group!\n{link}'); return t.includes('{link}') ? t.replaceAll('{link}', s.link) : t + '\n' + s.link; };
 
-    // registered as "promolink"; index.js routes ".promote <link>" here and ".promote @user" to the normal promote
-    def('promolink', { o: true, usage: 'promote <your-link> <their-group-link>' }, async c => {
-      const codes = [...c.args.join(' ').matchAll(/chat\.whatsapp\.com\/([A-Za-z0-9]+)/g)].map(m => m[1]);
-      if (!codes.length) return c.reply(`${T}\n\n⚠️ Usage: ${L.P}promote <your-group-link> <their-group-link>`);
-      const [mine, theirs] = codes.length >= 2 ? [codes[0], codes[1]] : [null, codes[0]];
-      const myLink = mine ? 'https://chat.whatsapp.com/' + mine : DEFAULT_LINK;
-      if (!myLink) return c.reply(`${T}\n\n⚠️ Give both links:\n${L.P}promote <your-group-link> <their-group-link>`);
-      if (waiting >= MAX_WAITING) return c.reply(`${T}\n\n⏳ I'm already waiting on ${waiting} groups to approve me. Try again later.`);
-      const wait = COOLDOWN - (Date.now() - last);
-      if (wait > 0 && !process.env.NO_COOLDOWN) return c.reply(`${T}\n\n⏳ Slow down to protect the bot's number. Try again in *${left(wait)}*.`);
-      last = Date.now();
+    // adds Message.groupStatusMessageV2 (field 103, a FutureProofMessage) to the encoder if this Baileys doesn't know it
+    function ensureProto(proto) {
+      if (!proto?.Message || 'groupStatusMessageV2' in proto.Message.prototype || proto.Message.__gs2) return;
+      const enc = proto.Message.encode;
+      proto.Message.encode = function (m, w) {
+        w = enc.call(this, m, w);
+        if (m && m.groupStatusMessageV2) { w.uint32((103 << 3) | 2).fork(); proto.Message.FutureProofMessage.encode(m.groupStatusMessageV2, w); w.ldelim(); }
+        return w;
+      };
+      proto.Message.__gs2 = true;
+    }
+    // how do we send a group status on this library? (null = we can't)
+    function statusSender(sock) {
+      let baileys = null, pkg = {};
+      try { baileys = require('@whiskeysockets/baileys'); } catch {}
+      try { pkg = require('@whiskeysockets/baileys/package.json'); } catch {}
+      const mode = process.env.GROUP_STATUS_API || (/itsliaaa/i.test(pkg.name || '') ? 'flag' : 'relay');
+      if (mode === 'flag') return (jid, text) => sock.sendMessage(jid, { text, groupStatus: true });
+      if (mode === 'wrap') return (jid, text) => sock.sendMessage(jid, { groupStatusMessage: { text } });
+      if (!baileys?.proto || typeof sock?.relayMessage !== 'function') return null;
+      return async (jid, text) => {
+        ensureProto(baileys.proto);
+        const id = (baileys.generateMessageIDV2 || baileys.generateMessageID)(sock.user?.id);
+        await sock.relayMessage(jid, {
+          messageContextInfo: { messageSecret: require('crypto').randomBytes(32) },
+          groupStatusMessageV2: { message: { extendedTextMessage: { text, backgroundArgb: 0xFF128C7E, contextInfo: { isGroupStatus: true } } } },
+        }, { messageId: id, additionalNodes: [{ tag: 'meta', attrs: { is_group_status: 'true' } }] });
+        return { key: { remoteJid: jid, id, fromMe: true }, messageTimestamp: Math.floor(Date.now() / 1000) };
+      };
+    }
+    const dm = (n, text) => { const sock = L.state.sock; if (sock && n) sock.sendMessage(n + '@s.whatsapp.net', { text }).catch(() => {}); };
 
-      let info;
-      try { info = await c.sock.groupGetInviteInfo(theirs); } catch { return c.reply(`${T}\n\n❌ Their group link is invalid or expired.`); }
-      const gid = info.id, subject = info.subject || 'the group';
-      const approval = !!(info.joinApprovalMode || info.membershipApprovalMode);
-      await c.reply(`${T}\n\n⏳ Joining *${subject}*…${approval ? `\n🔒 This group needs admin approval — I'll keep waiting for up to *${Math.round(WAIT_MS / 60000)} min* and then post.` : ''}`);
-
-      // everything below runs in the background so the bot stays responsive while it waits
-      (async () => {
-        const sock = () => L.state.sock, say = text => sock()?.sendMessage(c.chat, { text }).catch(() => {});
-        const myIds = () => [nj(sock().user.id), nj(sock().user.lid || '')];
-        let joined = false;
-        try { await sock().groupAcceptInvite(theirs); joined = true; }
-        catch (e) {
-          const msg = String(e?.message || e);
-          if (!/conflict|already|409/i.test(msg)) return say(`${T}\n\n❌ Couldn't join *${subject}*: ${msg}\nThe link may be revoked.`);
+    let busy = false;
+    async function work() {
+      const sock = L.state.sock, s = st();
+      if (!sock || busy || !s.queue.length) return;
+      const send = statusSender(sock); if (!send || !s.verified) return; // never join a group until posting is confirmed to work
+      busy = true;
+      const item = s.queue[0], to = item.by || L.OWNERS[0];
+      try {
+        let info;
+        try { info = await sock.groupGetInviteInfo(item.code); }
+        catch { s.queue.shift(); db.save(); return dm(to, `⚠️ Promo: the link ${item.code.slice(0, 6)}… is invalid or expired, removed.`); }
+        item.id = info.id; item.name = info.subject;
+        const all = await sock.groupFetchAllParticipating().catch(() => null);
+        if (!all) return;
+        if (!all[info.id]) { // not in yet: ask once, then just keep checking (waits as long as it takes)
+          if (!item.asked) {
+            item.asked = Date.now();
+            try { await sock.groupAcceptInvite(item.code); } catch (e) { item.err = String(e?.message || e); }
+            db.save();
+            if (!(await sock.groupFetchAllParticipating().catch(() => ({})))[info.id]) { s.queue.push(s.queue.shift()); return; }
+          } else { s.queue.push(s.queue.shift()); return; }
         }
-        // wait until we really are a member (immediately, or after an admin approves the request)
-        waiting++;
-        let meta = null; const deadline = Date.now() + WAIT_MS; let announced = false;
-        try {
-          for (;;) {
-            try { const m = await sock().groupMetadata(gid); if (m?.participants?.some(p => aliases(p).some(a => myIds().includes(a)))) { meta = m; break; } } catch {}
-            if (Date.now() > deadline) break;
-            if (!announced) { announced = true; await say(`${T}\n\n⏳ Waiting for *${subject}* to approve my request…`); }
-            await sleep(POLL_MS);
-          }
-        } finally { waiting--; }
-        if (!meta) return say(`${T}\n\n⌛ *${subject}* didn't approve me within ${Math.round(WAIT_MS / 60000)} min, so nothing was sent.`);
-        let report;
-        const me = meta.participants.find(p => aliases(p).some(a => myIds().includes(a)));
-        if (meta.announce && !me?.admin) report = `⚠️ *${subject}* is admins-only, so I can't send there.`;
-        else {
-          try {
-            await sock().sendMessage(gid, { text: textFor(myLink), mentions: meta.participants.map(p => p.id) }); // hidden tag-all
-            report = `✅ Sent to *${subject}* (${meta.participants.length} members, hidden tag)`;
-          } catch (e) { report = `❌ Couldn't send: ${e?.message || e}`; }
-        }
-        if (joined) { await sleep(2500); try { await sock().groupLeave(gid); report += '\n👋 Left the group.'; } catch { report += '\n⚠️ Could not leave automatically.'; } }
-        else report += '\n(I was already in this group, so I stayed.)';
-        await say(`${T}\n\n${report}`);
-      })().catch(e => console.error('promote failed:', e?.message || e));
+        await sleep(6000 + rnd(0, 4000)); // let the group load, like a person would
+        let sent = null, err = '';
+        for (let i = 0; i < 3 && !sent; i++) { try { sent = await send(info.id, body(s)); } catch (e) { err = String(e?.message || e); await sleep(5000); } }
+        await sleep(4000 + rnd(0, 3000));
+        await sock.groupLeave(info.id).catch(e => console.error('promo: leave failed:', e?.message || e));
+        if (sent?.key) await sock.chatModify({ delete: true, lastMessages: [{ key: sent.key, messageTimestamp: sent.messageTimestamp }] }, info.id).catch(() => {});
+        s.queue.shift(); if (sent) s.done++; db.save();
+        dm(to, sent ? `✅ Promo posted in *${info.subject}*. Left and cleared the chat. (${s.queue.length} left in the queue)` : `❌ Promo failed in *${info.subject}* (${err || 'unknown error'}). I left the group. Re-queue it to try again.`);
+      } catch (e) { console.error('promo worker failed:', e?.message || e); }
+      finally { busy = false; }
+    }
+    setInterval(() => work(), TICK).unref();
+    L.petTicks = Object.assign(L.petTicks || {}, { promoTick: work }); // so it can be run by hand / tested
+
+    def(['promotegroupstatus', 'pgs'], { ba: true, usage: ['promotegroupstatus test', 'promotegroupstatus <invite link(s)>', 'promotegroupstatus link <your group link>', 'promotegroupstatus text <message>', 'promotegroupstatus list', 'promotegroupstatus stop'] }, c => {
+      const s = st(), a = (c.args[0] || '').toLowerCase(), rest = c.args.slice(1).join(' ');
+      if (a === 'link') {
+        const l = (/https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9]+/.exec(rest) || [])[0];
+        if (!l) return c.reply(`⚠️ Send your own group's invite link:\n${P}promotegroupstatus link https://chat.whatsapp.com/…`);
+        s.link = l; db.save(); return c.reply(`✅ Promo link saved:\n${l}`);
+      }
+      if (a === 'text') { s.text = rest.trim(); db.save(); return c.reply(s.text ? `✅ Status text saved. Use {link} where your link should go (it's added at the end if you don't).` : '✅ Back to the default text.'); }
+      if (a === 'test') { // post a test group status in THIS group (use one of your own)
+        if (!c.isGroup) return c.reply('Send this inside one of your own groups.');
+        const send = statusSender(c.sock); if (!send) return c.reply('🚫 This WhatsApp library has no way to send a group status.');
+        return send(c.chat, '✅ Group status test').then(() => c.reply(`📤 Sent. Open this group and check: is "✅ Group status test" showing as a *group status* (the status ring on the group)?\n\nIf yes: *${P}promotegroupstatus ok*\nIf not: tell me what you see.`)).catch(e => c.reply(`❌ Sending failed: ${String(e?.message || e)}`));
+      }
+      if (a === 'ok') { s.verified = true; db.save(); return c.reply('✅ Marked as working. You can queue groups now.'); }
+      if (a === 'stop' || a === 'clear') { const n = s.queue.length; s.queue = []; db.save(); return c.reply(`🛑 Promo queue cleared (${n} removed).`); }
+      if (a === 'list' || a === 'status') return c.reply(`📣 *PROMO*\n\n🔗 Your link: ${s.link || '_not set_'}\n🔓 Unlocked: ${s.verified ? 'yes' : 'no (run test, then ok)'}\n✅ Posted so far: *${s.done}*\n⏳ Waiting: *${s.queue.length}*${s.queue.slice(0, 15).map(i => `\n• ${i.name || i.code.slice(0, 8) + '…'}${i.asked ? ' _(asked to join)_' : ''}`).join('')}\n\n_Preview:_\n${s.link ? body(s) : '_set your link first_'}`);
+      const codes = [...new Set([...c.args.join(' ').matchAll(/chat\.whatsapp\.com\/([A-Za-z0-9]{10,})/g)].map(x => x[1]))];
+      if (!codes.length) return c.reply(`📣 *PROMO STATUS*\n\nPosts a group status with your group link inside groups you have permission to post in, then leaves.\n\n➜ ${P}promotegroupstatus link <your group link>\n➜ ${P}promotegroupstatus <invite link> <invite link> …\n➜ ${P}promotegroupstatus text <message>  (optional)\n➜ ${P}promotegroupstatus list · stop`);
+      if (!s.link) return c.reply(`⚠️ Set your own group link first:\n${P}promotegroupstatus link https://chat.whatsapp.com/…`);
+      if (!s.verified) return c.reply(`🔒 Not unlocked yet. Run *${P}promotegroupstatus test* in one of your own groups first, check the status shows up, then send *${P}promotegroupstatus ok*.`);
+      let added = 0; for (const code of codes) if (!s.queue.some(i => i.code === code)) { s.queue.push({ code, by: c.sender, at: Date.now() }); added++; }
+      db.save(); c.reply(`📣 Queued *${added}* group${added === 1 ? '' : 's'}. I'll join (and wait for approval if needed), post, leave, and DM you after each one.\n⏳ ${s.queue.length} in the queue`);
     });
   },
 };
