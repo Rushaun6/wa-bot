@@ -16,7 +16,7 @@ const BASE_SLOTS = 2, MAX_REBIRTH = 12, INCOME_MIN = 3; // income is paid every 
 const rebirthCost = n => 250000 * 2 ** n; // n = rebirths you already have (0..11)
 
 // ab = abilities: guard (% block robbery) duel (+% win) beg/work/daily (+% earnings) robboost (+% rob success) pigeon (steals) bankmult (multiplies your bank every N hours)
-const T = (tier, id, name, emoji, o = {}) => ({ id, name, emoji, tier, price: o.price || TIERS[tier].price, noUpgrade: !!o.noUpgrade, income: o.income || 0, ab: o.ab || [], owners: o.owners || null });
+const T = (tier, id, name, emoji, o = {}) => ({ id, name, emoji, tier, price: o.price || TIERS[tier].price, noUpgrade: !!o.noUpgrade, income: o.income || 0, ab: o.ab || [] });
 const PETS = [
   T('common', 'chicken', 'Chicken', '🐔', { income: 120 }), T('common', 'pig', 'Pig', '🐖', { income: 140 }), T('common', 'sheep', 'Sheep', '🐑', { income: 130 }),
   T('common', 'cow', 'Cow', '🐄', { income: 160 }), T('common', 'turtle', 'Turtle', '🐢', { income: 150 }),
@@ -92,21 +92,19 @@ const EXTRA = {
 for (const [id, list] of Object.entries(EXTRA)) { const p = PETS.find(x => x.id === id); if (!p) throw new Error('EXTRA: unknown pet ' + id); p.ab.push(...list); }
 // cosmic: the GOAT. Every 70 hours there's a 7% chance your bank gets multiplied by 7.
 PETS.push(T('cosmic', 'cr7', 'CR7', '🐐', { price: 777777777, noUpgrade: true, ab: [{ type: 'bankmult', mult: 7, hours: 70, chance: 7 }] }));
-// ---- private pets: exclusive to the numbers in `owners` (digits only). They are NOT in PETS, so the shop, lists, crates and
-// every random pick can never hand them out, but they are in BY_ID so they work everywhere for their owner (income, duels, robbing...).
+// ---- two custom cosmic pets: regular pets everybody can see and get (shop, lists, info, crates, .spawnpet, robbing... like any other pet).
 // ability `cap` raises the usual cap for that stat (the normal caps are duel 20 and robboost 30). Level 3 = 2x, so cap = base x 2.
-const SECRET = [
-  T('cosmic', 'odegaard', 'Captain Odegaard 👑', '©️🧠', { income: 150000, owners: ['18768711565'], ab: [
+PETS.push(
+  T('cosmic', 'odegaard', 'Captain Odegaard 👑', '©️🧠', { income: 150000, ab: [
     { type: 'duel', base: 25, cap: 50 }, { type: 'robboost', base: 30, cap: 60 }, { type: 'robloot', base: 25 },
     { type: 'heistall', min: 5, max: 10 }, { type: 'guard', base: 10 } ] }),
-  T('cosmic', 'zeno', 'Zeno', '🤺', { owners: ['18765945870'], ab: [{ type: 'duel', base: 50, cap: 100 }] }),
-];
-const BY_ID = Object.fromEntries([...PETS, ...SECRET].map(p => [p.id, p]));
+  T('cosmic', 'zeno', 'Zeno', '🤺', { ab: [{ type: 'duel', base: 50, cap: 100 }] }),
+);
+// Each of these two people is given their pet once (digits only; the bot also learns their WhatsApp ID, see cmd-pets.js). What happens to it after that is up to them.
+const GIFTS = [{ id: 'odegaard', phones: ['18768711565'] }, { id: 'zeno', phones: ['18765945870'] }];
+const BY_ID = Object.fromEntries(PETS.map(p => [p.id, p]));
 const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-const match = (k, p) => p.id === k || norm(p.name) === k;
-// find(q, viewer): public pets, plus the private pets that belong to `viewer` (a number). findAny(q): everything (bot admins, .spawnpet)
-const find = (q, viewer) => { const k = norm(q); if (!k) return null; return PETS.find(p => match(k, p)) || PETS.find(p => p.id.startsWith(k)) || SECRET.find(p => viewer && p.owners.includes(viewer) && (match(k, p) || p.id.startsWith(k))) || null; };
-const findAny = q => { const k = norm(q); return find(q) || (k ? SECRET.find(p => match(k, p) || p.id.startsWith(k)) : null) || null; };
+const find = q => { const k = norm(q); if (!k) return null; return PETS.find(p => p.id === k || norm(p.name) === k) || PETS.find(p => p.id.startsWith(k)) || null; };
 const tierIdx = p => ORDER.indexOf(p.tier);
 const mult = lvl => LVL_MULT[Math.max(0, Math.min(3, lvl || 0))];
 const money = n => '$' + Math.floor(n).toLocaleString('en-US');
@@ -163,4 +161,4 @@ function shop(now = Date.now()) {
   return { stock, restockIn: (slot + 1) * SLOT_MS - now, slot };
 }
 
-module.exports = { SECRET, findAny, heisters, ab, CAP, slotId, SHOP_SIZE, bankPets, TIERS, ORDER, PETS, BY_ID, LVL_MULT, BASE_SLOTS, MAX_REBIRTH, INCOME_MIN, rebirthCost, find, tierIdx, mult, slots, owned, equipped, income, guardChance, duelBonus, robBoost, boost, pigeons, upgradeCost, describe, shop, money };
+module.exports = { GIFTS, heisters, ab, CAP, slotId, SHOP_SIZE, bankPets, TIERS, ORDER, PETS, BY_ID, LVL_MULT, BASE_SLOTS, MAX_REBIRTH, INCOME_MIN, rebirthCost, find, tierIdx, mult, slots, owned, equipped, income, guardChance, duelBonus, robBoost, boost, pigeons, upgradeCost, describe, shop, money };

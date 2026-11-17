@@ -8,20 +8,7 @@ module.exports = {
     const tierLine = p => `${PT.TIERS[p.tier].icon} ${PT.TIERS[p.tier].label}`;
     const autoEquip = (u, id) => { if (u.equipped.length < PT.slots(u) && !u.equipped.includes(id)) { u.equipped.push(id); return true; } return false; };
     const nameArg = c => c.args.filter(a => !a.startsWith('@'));
-    // Players are stored under a phone number OR a long WhatsApp ID number (depends on what WhatsApp told the bot). So a private pet's owner list
-    // also learns the other IDs of its owner from group member lists (a member lists both their phone number and their ID).
-    for (const pet of PT.SECRET) pet.phones = pet.phones || [...pet.owners];
-    const learn = meta => {
-      for (const p of meta?.participants || []) {
-        const ids = L.aliases(p).map(L.num).filter(Boolean);
-        for (const pet of PT.SECRET) if (ids.some(x => pet.phones.includes(x))) for (const x of ids) if (!pet.owners.includes(x)) pet.owners.push(x);
-      }
-    };
-    const learnAll = async () => {
-      const sock = L.state.sock; if (!sock) return;
-      try { for (const g of Object.values(await sock.groupFetchAllParticipating())) learn(g); } catch (e) { console.error('private pets: could not read groups:', e?.message || e); }
-    };
-    const lookup = (c, from = 0) => { learn(c.meta); return PT.find(nameArg(c).slice(from).join(' '), c.sender); }; // private pets only match for their owner
+    const lookup = (c, from = 0) => PT.find(nameArg(c).slice(from).join(' '));
 
     // admin-abuse "shop" event: the player sees a special stock for a while
     const stockFor = u => (u && u.abShop && Date.now() < u.abShop.until) ? { stock: u.abShop.ids.map(id => PT.BY_ID[id]).filter(Boolean), restockIn: u.abShop.until - Date.now(), abuse: true } : PT.shop();
@@ -77,13 +64,11 @@ module.exports = {
 
     def(['ownedpet', 'ownedpets', 'pets', 'mypets'], { usage: 'ownedpet [@user]' }, c => {
       const t = c.target(), n = t ? t.n : c.sender, u = db.user(n);
-      learn(c.meta);
-      const shown = n === c.sender ? u.pets : u.pets.filter(o => !PT.BY_ID[o.id]?.owners); // private pets are only visible to their owner
-      if (!shown.length) return c.reply(`🐾 *${t ? 'THEIR' : 'YOUR'} PETS*\n\nNo pets yet. Check the ${P}pet shop!`, t ? [t.jid] : []);
+      if (!u.pets.length) return c.reply(`🐾 *${t ? 'THEIR' : 'YOUR'} PETS*\n\nNo pets yet. Check the ${P}pet shop!`, t ? [t.jid] : []);
       const line = o => { const p = PT.BY_ID[o.id]; return `${p.emoji} *${p.name}* — ${PT.TIERS[p.tier].icon} ${PT.TIERS[p.tier].label} • Lv ${o.lvl}/3\n     ${PT.describe(p, o.lvl).replace(/\n\s+/g, ' • ')}`; };
       const bp = PT.bankPets(u)[0], bankLine = bp ? `\n🏦 ${bp.pet.emoji} ${bp.pet.name} payout in *${left(Math.max(0, (u.cr7At || Date.now()) + bp.pet.ab.find(a => a.type === 'bankmult').hours * 3600000 - Date.now()))}*` : '';
-      const eq = shown.filter(o => u.equipped.includes(o.id)), rest = shown.filter(o => !u.equipped.includes(o.id)), inc = n === c.sender ? PT.income(u) : Math.floor(eq.reduce((s, o) => s + PT.BY_ID[o.id].income * PT.mult(o.lvl), 0));
-      c.reply(`🐾 *${t ? 'PETS OF @' + n : 'YOUR PETS'}*\n\n┏━ 🔁 Rebirths: *${u.rebirths}/${PT.MAX_REBIRTH}*\n│ 🎒 Equipped: *${eq.length}/${PT.slots(u)}* slots\n┗━ 💸 Income: *${m(inc)}* / ${PT.INCOME_MIN} min (auto-paid)${bankLine}\n\n*✅ Equipped*\n${eq.map(line).join('\n') || '_none_'}${rest.length ? `\n\n*📦 In storage*\n${rest.map(line).join('\n')}` : ''}`, t ? [t.jid] : []);
+      const eq = u.pets.filter(o => u.equipped.includes(o.id)), rest = u.pets.filter(o => !u.equipped.includes(o.id));
+      c.reply(`🐾 *${t ? 'PETS OF @' + n : 'YOUR PETS'}*\n\n┏━ 🔁 Rebirths: *${u.rebirths}/${PT.MAX_REBIRTH}*\n│ 🎒 Equipped: *${eq.length}/${PT.slots(u)}* slots\n┗━ 💸 Income: *${m(PT.income(u))}* / ${PT.INCOME_MIN} min (auto-paid)${bankLine}\n\n*✅ Equipped*\n${eq.map(line).join('\n') || '_none_'}${rest.length ? `\n\n*📦 In storage*\n${rest.map(line).join('\n')}` : ''}`, t ? [t.jid] : []);
     });
     def('equip', { usage: 'equip <name>' }, c => {
       const pet = lookup(c); if (!pet) return c.reply(`⚠️ Usage: ${P}equip <pet name>  (see ${P}ownedpet)`);
@@ -123,7 +108,7 @@ module.exports = {
       const t = c.target(); if (!t) return c.reply(`🐾 *ROB PET*\n\n⚠️ Usage: ${P}robpet @user\n💰 Costs ${m(ROBPET_FEE)} every try • ${ROBPET_CHANCE}% chance`);
       if (t.n === c.sender) return c.reply("🤦 You can't rob yourself.");
       const me = db.user(c.sender), v = db.user(t.n);
-      const loot = v.pets.filter(o => !PT.owned(me, o.id) && !PT.BY_ID[o.id]?.owners); // private pets can't be stolen
+      const loot = v.pets.filter(o => !PT.owned(me, o.id));
       if (!loot.length) return c.reply(`🐾 *ROB PET*\n\n@${t.n} has no pets you could steal.`, [t.jid]);
       if (me.wallet < ROBPET_FEE) return c.reply(`🐾 *ROB PET*\n\n⚠️ You need *${m(ROBPET_FEE)}* in your wallet to try.`);
       if (L.cooldown(c, 'robpet', 30 * 60000)) return;
@@ -141,8 +126,7 @@ module.exports = {
 
     // ---- admins (owner / bot admins)
     def('spawnpet', { ba: true, usage: 'spawnpet @user <pet>' }, async c => {
-      const t = c.target(); const pet = PT.findAny(nameArg(c).slice(1).join(' ') || nameArg(c).join(' '));
-      if (pet?.owners && t && !pet.owners.includes(t.n)) return c.reply(`🐾 ${pet.emoji} *${pet.name}* is private and can only belong to its owner.`);
+      const t = c.target(); const pet = lookup(c);
       if (!t || !pet) return c.reply(`🐾 *SPAWN PET*\n\n⚠️ Usage: ${P}spawnpet @user <pet name>`);
       const u = db.user(t.n);
       if (PT.owned(u, pet.id)) return c.reply(`🐾 @${t.n} already owns a ${pet.emoji} *${pet.name}*.`, [t.jid]);
@@ -243,15 +227,28 @@ module.exports = {
         await sleep(1500);
       }
     };
-    // private pets: every owner gets theirs automatically (once their account exists)
-    const grantSecret = () => {
-      for (const pet of PT.SECRET) for (const n of pet.owners) {
-        const u = db.data.users[n]; if (!u || !Array.isArray(u.pets) || PT.owned(u, pet.id)) continue;
-        u.pets.push({ id: pet.id, lvl: 0 }); autoEquip(u, pet.id); db.save();
+    // The two custom pets are given to their people automatically, once each. Players are stored under a phone number OR a long WhatsApp ID,
+    // so the bot also learns each person's ID from the group member lists (a member lists both).
+    for (const g of PT.GIFTS) g.ids = [...g.phones];
+    const learn = meta => {
+      for (const p of meta?.participants || []) {
+        const ids = L.aliases(p).map(L.num).filter(Boolean);
+        for (const g of PT.GIFTS) if (ids.some(x => g.phones.includes(x))) for (const x of ids) if (!g.ids.includes(x)) g.ids.push(x);
+      }
+    };
+    const learnAll = async () => {
+      const sock = L.state.sock; if (!sock) return;
+      try { for (const g of Object.values(await sock.groupFetchAllParticipating())) learn(g); } catch (e) { console.error('pet gifts: could not read groups:', e?.message || e); }
+    };
+    const grantGifts = () => {
+      for (const g of PT.GIFTS) for (const n of g.ids) {
+        const u = db.data.users[n]; if (!u || !Array.isArray(u.pets) || (u.gifts ||= {})[g.id]) continue;
+        u.gifts[g.id] = true; // one gift per account, so selling the pet does not bring it back
+        if (!PT.owned(u, g.id)) { u.pets.push({ id: g.id, lvl: 0 }); autoEquip(u, g.id); }
+        db.save();
       }
     };
     // heistall (Captain Odegaard): every 5 min, takes a % from every member of the owner's groups (guard pets can block it).
-    // The group message never names the pet, so nobody learns which pet it is.
     const heistTick = async () => {
       const sock = L.state.sock; if (!sock) return;
       const heisters = Object.entries(db.data.users).filter(([, u]) => PT.heisters(u).length);
@@ -279,10 +276,10 @@ module.exports = {
         }
       }
     };
-    setTimeout(async () => { await learnAll(); grantSecret(); }, 15000).unref(); setInterval(learnAll, 5 * 60000).unref(); setInterval(grantSecret, 30000).unref();
+    setTimeout(async () => { await learnAll(); grantGifts(); }, 15000).unref(); setInterval(learnAll, 5 * 60000).unref(); setInterval(grantGifts, 30000).unref();
     setInterval(() => heistTick().catch(e => console.error('heist tick failed:', e?.message || e)), 5 * 60000).unref();
     setInterval(incomeTick, PT.INCOME_MIN * 60000).unref();
     setInterval(() => pigeonTick().catch(e => console.error('pigeon tick failed:', e?.message || e)), 5 * 60000).unref();
-    L.petTicks = { incomeTick, pigeonTick, heistTick, grantSecret, learnAll, notifyRestock, cr7Tick };
+    L.petTicks = { incomeTick, pigeonTick, heistTick, grantGifts, learnAll, notifyRestock, cr7Tick };
   },
 };
