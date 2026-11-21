@@ -180,7 +180,7 @@ module.exports = {
       for (const s of SYMS) {
         const a = A[s], x = S.assets[s], R = a.run;
         const z = a.beta * mz + Math.sqrt(1 - a.beta * a.beta) * gauss(), dev = Math.log(x.p / a.base);
-        let r = -(0.00004 * dev + 0.00002 * dev * dev * dev) + S.mood * a.beta + a.vol * z - 0.5 * a.vol * a.vol + (a.mu || 0); // weak pull to base; very strong once it is absurdly far (bubbles burst)
+        let r = -(0.00004 * dev + 0.00002 * dev * dev * dev) + S.mood * a.beta + a.vol * (L.state?.worldEvent && Date.now() < L.state.worldEvent.until ? L.state.worldEvent.ab.vol || 1 : 1) * z - 0.5 * a.vol * a.vol + (a.mu || 0); // weak pull to base; very strong once it is absurdly far (bubbles burst)
         const run = x.run;
         if (!run && Math.random() < R.p) { // a new run: a power-law pump (the tail is unlimited) or a crash that balances it
           const pump = Math.random() < R.q; let F = 1, size;
@@ -270,8 +270,9 @@ module.exports = {
     }
 
     // ================= commands =================
-    L.trading = { step, load, advance, render, A, SYMS, news, fresh, newAsset }; // for tests
-    const ask = (p, s) => p * (1 + A[s].spread), bid = (p, s) => p * (1 - A[s].spread);
+    L.trading = { step, load, advance, render, A, SYMS, news, fresh, newAsset, save }; // used by tests and by cmd-rumor.js
+    const sp = (s, u) => A[s].spread * (1 - Math.min(50, u && L.pets ? L.pets.ab(u, 'broker') : 0) / 100); // broker pets shrink the spread
+    const ask = (p, s, u) => p * (1 + sp(s, u)), bid = (p, s, u) => p * (1 - sp(s, u));
     const pick = c => { const s = (c.args[0] || '').toUpperCase(); return A[s] ? s : null; };
     const list = () => SYMS.map(s => `${A[s].emoji} ${s}`).join(' • ');
     const ICON = { rumor: '🗞️', sched: '⏰', breaking: '🚨', confirmed: '✅', denied: '❌', earnings: '📊', update: '🔄', revise: '✏️', chatter: '💬' };
@@ -292,7 +293,7 @@ module.exports = {
       const amt = a === 'all' ? Math.floor(u.wallet) : parseAmt(a);
       if (!amt || amt < MIN_TRADE) return c.reply(`⚠️ Enter an amount (min ${m(MIN_TRADE)}).\nExample: ${P}tbuy ${s} 5000  or  ${P}tbuy ${s} all`);
       if (amt > u.wallet) return c.reply(`⚠️ You only have *${m(u.wallet)}* in your wallet.`);
-      const price = ask(S.assets[s].p, s), q = amt / price;
+      const price = ask(S.assets[s].p, s, u), q = amt / price;
       const pos = ((u.stocks ||= {})[s] ||= { q: 0, cost: 0 });
       pos.q += q; pos.cost += amt; u.wallet -= amt; db.save();
       c.reply(`✅ *BOUGHT ${s}*\n\n${A[s].emoji} ${q.toFixed(q < 1 ? 4 : 2)} @ $${fmtP(price)}\n💸 Spent: *${m(amt)}*\n💰 Wallet: *${m(u.wallet)}*`);
@@ -303,7 +304,7 @@ module.exports = {
       if (!s) return c.reply(`Which asset?\n${list()}\n\nExample: ${P}tsell NVA all  or  ${P}tsell NVA 2k`);
       const u = db.user(c.sender), pos = u.stocks?.[s];
       if (!pos || pos.q <= 0) return c.reply(`You don't own any ${s}.`);
-      const price = bid(S.assets[s].p, s), a = (c.args[1] || 'all').toLowerCase();
+      const price = bid(S.assets[s].p, s, u), a = (c.args[1] || 'all').toLowerCase();
       let q;
       if (a === 'all') q = pos.q;
       else if (a === 'half') q = pos.q / 2;
@@ -319,7 +320,7 @@ module.exports = {
 
     def(['pf', 'portfolio', 'tpf'], { usage: ['pf'] }, c => {
       const S = advance(), u = db.user(c.sender), st = u.stocks || {};
-      const rows = Object.entries(st).filter(([s, p]) => p.q > 0 && A[s]).map(([s, p]) => { const val = p.q * bid(S.assets[s].p, s); return { s, p, val, pnl: val - p.cost }; }).sort((x, y) => y.val - x.val);
+      const rows = Object.entries(st).filter(([s, p]) => p.q > 0 && A[s]).map(([s, p]) => { const val = p.q * bid(S.assets[s].p, s, u); return { s, p, val, pnl: val - p.cost }; }).sort((x, y) => y.val - x.val);
       if (!rows.length) return c.reply(`📂 *PORTFOLIO*\n\nYou don't own anything yet.\n${P}market to see prices, then ${P}tbuy NVA 5000`);
       const tv = rows.reduce((t, r) => t + r.val, 0), tc = rows.reduce((t, r) => t + r.p.cost, 0);
       const lines = rows.map(r => `${A[r.s].emoji} *${r.s}*  ${r.p.q.toFixed(r.p.q < 1 ? 4 : 2)} @ avg $${fmtP(r.p.cost / r.p.q)}\n│   ${m(r.val)}  ${r.pnl >= 0 ? '🟢' : '🔴'} ${r.pnl >= 0 ? '+' : '-'}${m(Math.abs(r.pnl)).replace('-', '')} (${pct(r.p.cost ? r.pnl / r.p.cost : 0)})`);

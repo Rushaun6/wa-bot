@@ -54,7 +54,13 @@ function bet(c, a, min = MIN) {
 // ---------- tiny animations (edit one message a few times) + spam cooldown ----------
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // admin-abuse boosts live on the player: u.ab = { cash: {x, until}, luck: {x, until}, sale, frenzy, jackpot ... }
-const abOf = (u, type, def = 1) => { const b = u && u.ab && u.ab[type]; return b && Date.now() < b.until ? b.x : def; };
+// A WORLD EVENT (cmd-events.js) can switch the same kinds of boosts on for EVERYONE: state.worldEvent = { until, ab: { cash: 2, luck: 2, sale: 30, frenzy: 1, jackpot: 1.25 } }
+const worldAb = () => { const e = state.worldEvent; return e && Date.now() < e.until ? e.ab : null; };
+const abOf = (u, type, def = 1) => {
+  const b = u && u.ab && u.ab[type], mine = b && Date.now() < b.until ? b.x : undefined, w = worldAb()?.[type];
+  if (mine === undefined && w === undefined) return def; if (mine === undefined) return w; if (w === undefined) return mine;
+  return type === 'sale' || type === 'frenzy' ? Math.max(mine, w) : mine * w; // percent-off and on/off flags don't stack, multipliers do
+};
 const ANIM_MS = Number(process.env.ANIM_DELAY ?? 700);
 async function animate(c, frames, final, mentions = [], firstMentions = []) {
   try {

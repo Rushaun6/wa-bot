@@ -88,7 +88,7 @@ module.exports = {
 
     def(['economy', 'eco'], { g: true, a: true, usage: 'economy on/off' }, c => {
       const v = (c.args[0] || '').toLowerCase(), g = db.group(c.chat);
-      if (!['on', 'off'].includes(v)) return c.reply(`💰 *ECONOMY*\n\nStatus in this group: ${g.economy === false ? '*OFF* ❌' : '*ON* ✅'}\nUsage: ${P}economy on|off`);
+      if (!['on', 'off'].includes(v)) return c.reply(`💰 *ECONOMY*\n\nStatus in this group: ${g.economy === true ? '*ON* ✅' : '*OFF* ❌'} (off until an admin turns it on)\nUsage: ${P}economy on|off`);
       g.economy = v === 'on'; db.save();
       c.reply(`💰 *ECONOMY*\n\nStatus: ${v === 'on' ? '*ON* ✅\nEconomy, gambling, pets and minigames work here.' : '*OFF* ❌\nEconomy, gambling, pets, minigames and the pigeon are disabled in this group.'}`);
     });

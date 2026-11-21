@@ -90,10 +90,11 @@ module.exports = {
       if (v.wallet < 200) return c.reply('🥷 *ROB*\n\nThey are too broke to be worth it.');
       me.robCd = frenzy ? 0 : now + 10 * 60000;
       L.autoPad?.(v); // auto padlock: puts the lock back on first if it ran out
-      if (!op && now < v.padlock) { db.save(); return c.reply(`🥷 *ROB*\n\n🔒 @${t.n} has a padlock. Robbery failed.`, [t.jid]); }
+      const blackout = L.abOf(null, 'blackout', 0) > 0; // Blackout world event: padlocks don't work, guards are halved
+      if (!op && !blackout && now < v.padlock) { db.save(); return c.reply(`🥷 *ROB*\n\n🔒 @${t.n} has a padlock. Robbery failed.`, [t.jid]); }
       const frames = ['🥷 *ROB*\n\n🥷 Sneaking up on them…', '🥷 *ROB*\n\n👀 Reaching for the wallet…'];
       const fail = why => { const f = Math.floor(Math.min(Math.max(0, me.wallet), rnd(100, 300)) * (1 - PT.ab(me, 'fine') / 100)); me.wallet -= f; db.save(); L.animate(c, frames, `🥷 *ROB*\n\n${why}\nFine: *-${m(f)}*\n${wal(me)}`, [t.jid]); };
-      const guard = op ? 0 : combine(PT.guardChance(v), IT.blockChance(v));
+      const guard = op ? 0 : combine(PT.guardChance(v), IT.blockChance(v)) * (blackout ? 0.5 : 1);
       if (rnd(1, 100) <= guard) return fail(`🛡️ @${t.n}'s defenses stopped you!`);
       const chance = op ? 100 : Math.min(frenzy ? 95 : 85, 40 + PT.robBoost(me) + IT.robBonus(me) + (frenzy ? 25 : 0));
       if (rnd(1, 100) > chance) return fail('🚔 Caught!');

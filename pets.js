@@ -66,7 +66,7 @@ const A = (type, base) => ({ type, base });
   ['celestial', 'trex', 'T-Rex', '🦖', 110000], ['celestial', 'sauropod', 'Sauropod', '🦕', 120000], ['celestial', 'mammoth', 'Mammoth', '🦣', 0, [A('guard', 55), A('duel', 18)]],
 ].forEach(([tier, id, name, emoji, inc, ab]) => PETS.push(T(tier, id, name, emoji, { income: inc, ab: ab || [] })));
 // ---- creative abilities for the new pets (they plug into the shop, crates, loans, businesses, robbing...)
-const CAP = { crate: 100, dblcrate: 40, haggle: 25, bizboost: 100, interest: 1.5, loanfee: 100, loanlimit: 300, mafia: 80, lockpick: 45, longlock: 150, sellprice: 30, cashback: 25, fine: 100, robloot: 60 };
+const CAP = { luck: 15, incmult: 300, payday: 40, explorer: 150, swift: 60, slayer: 200, broker: 50, silver: 100, mutagen: 60, crate: 100, dblcrate: 40, haggle: 25, bizboost: 100, interest: 1.5, loanfee: 100, loanlimit: 300, mafia: 80, lockpick: 45, longlock: 150, sellprice: 30, cashback: 25, fine: 100, robloot: 60 };
 const EXTRA = {
   // common
   mouse: [A('haggle', 2)], rat: [A('robloot', 4)], hamster: [A('interest', 0.05)], frog: [A('crate', 5)], snail: [A('longlock', 10)], ant: [A('bizboost', 3)], bee: [A('crate', 3)],
@@ -102,9 +102,22 @@ PETS.push(
 );
 // Each of these two people is given their pet once (digits only; the bot also learns their WhatsApp ID, see cmd-pets.js). What happens to it after that is up to them.
 const GIFTS = [{ id: 'odegaard', phones: ['18768711565'] }, { id: 'zeno', phones: ['18765945870'] }];
-const BY_ID = Object.fromEntries(PETS.map(p => [p.id, p]));
+// ---- 65 more pets with non-animal emojis (pets-new.js): luck, x2 money, crates every few minutes, expedition/boss/trading/rumor/fusion perks
+for (const [tier, id, name, emoji, inc, abil] of require('./pets-new')) {
+  if (PETS.some(x => x.id === id || x.emoji === emoji)) throw new Error('pets-new: duplicate pet ' + id + ' ' + emoji);
+  PETS.push(T(tier, id, name, emoji, { income: inc, ab: abil }));
+}
+// ---- fused pets (cmd-adventure.js .fuse) live in the database, not in this file: BY_ID looks them up on demand
+let fusedSource = () => ({});
+const BASE_BY_ID = Object.fromEntries(PETS.map(p => [p.id, p]));
+const BY_ID = new Proxy(BASE_BY_ID, {
+  get: (t, k) => t[k] ?? (typeof k === 'string' && k.startsWith('fx_') ? fusedSource()[k] : undefined),
+  has: (t, k) => k in t || (typeof k === 'string' && k.startsWith('fx_') && !!fusedSource()[k]),
+});
+const setFusedSource = f => { fusedSource = f; };
 const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const find = q => { const k = norm(q); if (!k) return null; return PETS.find(p => p.id === k || norm(p.name) === k) || PETS.find(p => p.id.startsWith(k)) || null; };
+const findOwned = (u, q) => { const k = norm(q); if (!k) return null; for (const o of (u && u.pets) || []) { const pet = BY_ID[o.id]; if (pet && (pet.id === k || norm(pet.name) === k)) return pet; } return null; };
 const tierIdx = p => ORDER.indexOf(p.tier);
 const mult = lvl => LVL_MULT[Math.max(0, Math.min(3, lvl || 0))];
 const money = n => '$' + Math.floor(n).toLocaleString('en-US');
@@ -112,14 +125,17 @@ const money = n => '$' + Math.floor(n).toLocaleString('en-US');
 // ---- a user's pets (u.pets = [{id,lvl}], u.equipped = [id], u.rebirths)
 const slots = u => BASE_SLOTS + (u.rebirths || 0);
 const owned = (u, id) => (u.pets || []).find(p => p.id === id);
-const equipped = u => (u.equipped || []).map(id => { const o = owned(u, id), pet = BY_ID[id]; return o && pet ? { pet, lvl: o.lvl || 0 } : null; }).filter(Boolean);
-const income = u => Math.floor(equipped(u).reduce((s, e) => s + e.pet.income * mult(e.lvl), 0));
+const isAway = (u, id) => Date.now() < ((u.away && u.away[id]) || 0); // on an expedition or recovering: its income and abilities pause
+const equipped = u => (u.equipped || []).map(id => { const o = owned(u, id), pet = BY_ID[id]; return o && pet && !isAway(u, id) ? { pet, lvl: o.lvl || 0 } : null; }).filter(Boolean);
+const income = u => Math.floor(equipped(u).reduce((s, e) => s + e.pet.income * mult(e.lvl), 0) * (1 + Math.min(CAP.incmult, stat(u, 'incmult')) / 100)); // incmult: +100 = x2 money
 const stat = (u, type) => equipped(u).reduce((s, e) => s + e.pet.ab.filter(a => a.type === type).reduce((x, a) => x + (a.base || 0) * mult(e.lvl), 0), 0);
 const guardChance = u => Math.min(70, stat(u, 'guard'));
 const capFor = (u, type, def) => Math.max(def, ...equipped(u).flatMap(e => e.pet.ab.filter(a => a.type === type && a.cap).map(a => a.cap)));
 const duelBonus = u => Math.min(capFor(u, 'duel', 20), stat(u, 'duel'));
 const robBoost = u => Math.min(capFor(u, 'robboost', 30), stat(u, 'robboost'));
-const boost = (u, type) => 1 + Math.min(100, stat(u, type)) / 100; // multiplier for beg/work/daily
+const boost = (u, type) => (1 + Math.min(100, stat(u, type)) / 100) * (Math.random() * 100 < Math.min(CAP.payday, stat(u, 'payday')) ? 2 : 1); // multiplier for beg/work/daily (payday: a chance to pay double)
+const luck = u => Math.min(20, Math.min(CAP.luck, stat(u, 'luck')) + (u.lucky && Date.now() < u.lucky.until ? u.lucky.x : 0)); // gambling luck points (pets + a lucky potion)
+const crateDroppers = u => equipped(u).filter(e => e.pet.ab.some(a => a.type === 'cratedrop'));
 const ab = (u, type) => Math.min(CAP[type] ?? 100, stat(u, type)); // capped ability total for a player
 const bankPets = u => equipped(u).filter(e => e.pet.ab.some(a => a.type === 'bankmult'));
 const pigeons = u => equipped(u).filter(e => e.pet.ab.some(a => a.type === 'pigeon'));
@@ -140,6 +156,9 @@ function describe(pet, lvl = 0) {
       mafia: `🇷🇺 ${v}% chance the mafia spares each item & pet`, lockpick: `🔓 +${v}% picklock success`, longlock: `⏳ +${v}% padlock duration`,
       sellprice: `💱 +${v}% more when selling items`, cashback: `🍀 ${v}% of gambling losses refunded`, fine: `🚔 -${v}% fine when a rob fails`, robloot: `💰 +${v}% more stolen when you rob`,
       heistall: `🕵️ steals ${Math.round((a.min || 0) * k * 10) / 10}-${Math.round((a.max || 0) * k * 10) / 10}% from everyone in your group every 5 min`,
+      luck: `🍀 +${v} luck (better coin flips and lucky saves when you gamble)`, incmult: `💸 +${v}% on ALL your pet income${v >= 100 ? ` (x${1 + v / 100} money!)` : ''}`, payday: `💵 ${v}% chance .beg/.work/.daily pay DOUBLE`,
+      cratedrop: `📦 a crate (about ${money(a.avg || 0)}) every ${Math.max(1, Math.round(a.mins / k * 10) / 10)} min`, explorer: `🧭 +${v}% expedition loot`, swift: `⏩ expeditions are ${v}% faster`,
+      slayer: `🗡️ +${v}% damage to world bosses`, broker: `📊 -${v}% trading spread`, silver: `🗣️ market rumors ${v}% stronger and harder to catch`, mutagen: `🧬 +${v}% fusion mutation chance`,
       bankmult: `🏦 every ${a.hours}h: ${a.chance || 100}% chance to multiply the money in your bank by ${a.mult}x` }[a.type]);
   }
   return out.join('\n   ');
@@ -161,4 +180,4 @@ function shop(now = Date.now()) {
   return { stock, restockIn: (slot + 1) * SLOT_MS - now, slot };
 }
 
-module.exports = { GIFTS, heisters, ab, CAP, slotId, SHOP_SIZE, bankPets, TIERS, ORDER, PETS, BY_ID, LVL_MULT, BASE_SLOTS, MAX_REBIRTH, INCOME_MIN, rebirthCost, find, tierIdx, mult, slots, owned, equipped, income, guardChance, duelBonus, robBoost, boost, pigeons, upgradeCost, describe, shop, money };
+module.exports = { findOwned, luck, crateDroppers, isAway, setFusedSource, GIFTS, heisters, ab, CAP, slotId, SHOP_SIZE, bankPets, TIERS, ORDER, PETS, BY_ID, LVL_MULT, BASE_SLOTS, MAX_REBIRTH, INCOME_MIN, rebirthCost, find, tierIdx, mult, slots, owned, equipped, income, guardChance, duelBonus, robBoost, boost, pigeons, upgradeCost, describe, shop, money };

@@ -29,7 +29,8 @@ module.exports = {
     function flip(c, a) {
       const amt = bet(c, a); if (!amt || L.cooldown(c, 'game', 3000)) return; const u = db.user(c.sender), day = dayKey();
       let fl = u.flipLuck; if (!fl || fl.d !== day) fl = u.flipLuck = { d: day, n: 0, t: 0 };
-      const chance = Math.min(LUCK_MAX, LUCK_BASE + LUCK_STEP * fl.n);
+      const lk = L.pets.luck(u) + Math.round((L.abOf(u, 'luck') - 1) * 10); // luck pets / potion / Lucky Hour: +0.4 points of win chance per luck
+      const chance = Math.min(0.62, Math.min(LUCK_MAX, LUCK_BASE + LUCK_STEP * fl.n) + lk * 0.004);
       const win = rnd(1, 10000) <= Math.round(chance * 10000);
       if (fl.n < LUCK_PLAYS && Date.now() - fl.t >= LUCK_GAP) { fl.n++; fl.t = Date.now(); }
       const net = win ? amt : -amt; u.wallet += net; db.save();

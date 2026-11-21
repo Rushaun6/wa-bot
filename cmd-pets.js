@@ -3,12 +3,14 @@ module.exports = {
   category: '🐾 PETS',
   register(def, L) {
     const { P, db, m, rnd, left, num, wal, sleep } = L;
+    // background posts (restock notices, pigeon, heist, pet abilities) only ever go to groups where an admin switched the bot AND the economy on
+    const econOn = id => db.data.groups[id]?.bot === true && db.data.groups[id]?.economy === true;
     const PT = L.pets;
     const ROBPET_FEE = 500000, ROBPET_CHANCE = 5;
     const tierLine = p => `${PT.TIERS[p.tier].icon} ${PT.TIERS[p.tier].label}`;
     const autoEquip = (u, id) => { if (u.equipped.length < PT.slots(u) && !u.equipped.includes(id)) { u.equipped.push(id); return true; } return false; };
     const nameArg = c => c.args.filter(a => !a.startsWith('@'));
-    const lookup = (c, from = 0) => PT.find(nameArg(c).slice(from).join(' '));
+    const lookup = (c, from = 0) => { const q = nameArg(c).slice(from).join(' '); return PT.find(q) || PT.findOwned(db.user(c.sender), q); }; // your own fused pets too
 
     // admin-abuse "shop" event: the player sees a special stock for a while
     const stockFor = u => (u && u.abShop && Date.now() < u.abShop.until) ? { stock: u.abShop.ids.map(id => PT.BY_ID[id]).filter(Boolean), restockIn: u.abShop.until - Date.now(), abuse: true } : PT.shop();
@@ -164,7 +166,7 @@ module.exports = {
         const text = `🔔 *PET SHOP RESTOCKED*\n\n` + (u.noti === 'all' ? stock.map(stockLine).join('\n') : `Spotted: \n` + hits.map(stockLine).join('\n') + `\n\n_Full shop: ${P}pet shop_`) + `\n\n🛒 ${P}pet buy <name>\n🔕 ${P}noti off`;
         const jid = n + '@s.whatsapp.net';
         try { await sock.sendMessage(jid, { text }); }
-        catch (e) { if (u.lastGroup) await sock.sendMessage(u.lastGroup, { text, mentions: [jid] }).catch(() => {}); }
+        catch (e) { if (u.lastGroup && econOn(u.lastGroup)) await sock.sendMessage(u.lastGroup, { text, mentions: [jid] }).catch(() => {}); }
         await sleep(1500);
       }
     };
@@ -183,7 +185,7 @@ module.exports = {
         if (hit) u.bank = Math.floor(u.bank * ab.mult); u.cr7At = now; db.save();
         const jid = n + '@s.whatsapp.net';
         const text = !hit ? `🐐 *CR7* tried to multiply @${n}'s bank but missed the shot (${ab.chance}% chance)... 😔\n🏦 Bank stays at ${m(u.bank)}\n⏳ Next try in ${ab.hours}h` : before > 0 ? `🐐 *CR7 SIUUUU!* 🐐\n\n@${n}'s bank just got *${ab.mult}x*!\n🏦 ${m(before)} → *${m(u.bank)}*\n⏳ Next payout in ${ab.hours}h` : `🐐 *CR7* was ready to multiply @${n}'s bank, but it's empty! Deposit some money (${P}deposit all).\n⏳ Next try in ${ab.hours}h`;
-        if (sock) await sock.sendMessage(u.lastGroup || jid, { text, mentions: [jid] }).catch(() => sock.sendMessage(jid, { text }).catch(() => {}));
+        if (sock) await sock.sendMessage(u.lastGroup && econOn(u.lastGroup) ? u.lastGroup : jid, { text, mentions: [jid] }).catch(() => sock.sendMessage(jid, { text }).catch(() => {}));
       }
     };
     setInterval(() => cr7Tick().catch(e => console.error('cr7 tick failed:', e?.message || e)), 5 * 60000).unref();
@@ -200,8 +202,8 @@ module.exports = {
       if (!thieves.length) return;
       let all; try { all = Object.values(await sock.groupFetchAllParticipating()); } catch (e) { console.error('pigeon: could not list groups:', e?.message || e); return; }
       const now = Date.now();
-      // only groups where the economy is on; map each member's number -> participant once
-      const groups = all.filter(g => db.data.groups[g.id]?.economy !== false)
+      // only groups where the bot AND the economy are switched on; map each member's number -> participant once
+      const groups = all.filter(g => econOn(g.id))
         .map(meta => ({ meta, byNum: new Map(meta.participants.map(p => [L.resolveNum(meta, p.id), p])) }));
       for (const [n, u] of thieves) {
         const pg = PT.pigeons(u), options = [];
@@ -259,7 +261,7 @@ module.exports = {
         const rng = PT.heisters(u).flatMap(e => e.pet.ab.filter(a => a.type === 'heistall').map(a => [a.min * PT.mult(e.lvl), a.max * PT.mult(e.lvl)]));
         const lo = rng.reduce((s, x) => s + x[0], 0), hi = rng.reduce((s, x) => s + x[1], 0);
         for (const meta of all) {
-          if (db.data.groups[meta.id]?.economy === false) continue;
+          if (!econOn(meta.id)) continue;
           const me = meta.participants.find(p => L.resolveNum(meta, p.id) === n); if (!me) continue;
           let total = 0, hit = 0;
           for (const p of meta.participants) {

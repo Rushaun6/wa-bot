@@ -30,7 +30,10 @@ function trackChanges(before, cat, cmd) {
     if (!d) continue;
     any = true;
     if (d < 0 && (LOSS_CATS.has(cat) || cmd === 'rob')) u.lost = (u.lost || 0) - d;
-    const cb = d < 0 && LOSS_CATS.has(cat) ? PT.ab(u, 'cashback') : 0; // lucky pets refund part of a gambling loss
+    const lk = d < 0 && LOSS_CATS.has(cat) && cmd !== 'accept' ? Math.min(20, PT.luck(u) + Math.round((abOf(u, 'luck') - 1) * 10)) : 0; // LUCK: a chance to get the whole loss back (not for duels: that money came from another player)
+    const saved = lk > 0 && Math.random() * 100 < lk;
+    if (saved) { const back = -d; u.wallet += back; u.lost = Math.max(0, (u.lost || 0) - back); refunds.push({ n, text: `🍀 *LUCKY SAVE!*\n\n@${n} got the whole *$${back.toLocaleString('en-US')}* back (${lk} luck)` }); }
+    const cb = d < 0 && !saved && LOSS_CATS.has(cat) ? PT.ab(u, 'cashback') : 0; // lucky pets refund part of a gambling loss
     if (cb > 0) { const back = Math.floor(-d * cb / 100); if (back > 0) { u.wallet += back; u.lost = Math.max(0, (u.lost || 0) - back); refunds.push({ n, text: `🍀 *LUCKY PET CASHBACK*\n\n@${n} got *+$${back.toLocaleString('en-US')}* back (${cb}% of the loss)` }); } }
     const jx = d > 0 && LOSS_CATS.has(cat) ? abOf(u, 'jackpot', 1) : 1; // JACKPOT HOUR admin abuse: wins pay extra
     if (jx > 1) { const extra = Math.floor(d * (jx - 1)); if (extra > 0) { u.wallet += extra; refunds.push({ n, text: `🎰 *JACKPOT HOUR* (${jx}x)\n\n@${n} won an extra *+$${extra.toLocaleString('en-US')}*!` }); } }
@@ -44,6 +47,9 @@ loadCommands(__dirname);
 
 // ---------- message handling ----------
 const seen = new Set();
+// The bot works in a group only after a group admin sends ".bot on" (default OFF). Private chats always work.
+const botOn = chat => db.data.groups[chat]?.bot === true;
+const BOT_SWITCH = { test: t => { t = String(t || '').trim().toLowerCase(); const w = P.toLowerCase() + 'bot'; return t === w || t.startsWith(w + ' ') || t.startsWith(w + '\n'); } }; // ".bot", ".bot on" ...
 async function onMessage(sock, upsert) {
   if (upsert.type !== 'notify') return;
   for (const msg of upsert.messages) {
@@ -61,6 +67,7 @@ async function handle(sock, msg) {
   if (process.env.STATUS_DEBUG && msg.key.remoteJid.endsWith('@g.us') && !text) console.log('STATUS_DEBUG message keys:', Object.keys(m));
   if (!text && !isStatusMsg(m)) return;
   const chat = msg.key.remoteJid, isGroup = chat.endsWith('@g.us'), fromMe = !!msg.key.fromMe;
+  if (isGroup && !botOn(chat) && !BOT_SWITCH.test(text)) return; // the bot is OFF in this group (".bot on" by a group admin turns it on): it only hears ".bot ..."
   if (isGroup && isStatusMsg(m)) { const g = db.group(chat); (g.statusKeys ||= []).push({ id: msg.key.id, p: msg.key.participant || msg.participant, me: fromMe }); if (g.statusKeys.length > 300) g.statusKeys.shift(); db.save(); } // remember group statuses so .ds (cmd-ds.js) can delete them
   const ownNum = num(sock.user?.id), ownLid = num(sock.user?.lid);
   const senderJid = fromMe ? nj(sock.user.id) : nj(isGroup ? (msg.key.participant || msg.participant) : chat);
@@ -128,7 +135,7 @@ async function handle(sock, msg) {
       return;
     }
   }
-  if (isGroup && ECON.has(c0.cat) && db.data.groups[chat]?.economy === false) { // economy switched off here (.economy off)
+  if (isGroup && ECON.has(c0.cat) && db.data.groups[chat]?.economy !== true) { // economy switched off here (.economy off)
     if (Date.now() > (ecoNotice.get(chat) || 0)) { ecoNotice.set(chat, Date.now() + 30000); await reply('💤 *ECONOMY OFF*\n\nThe economy is turned off in this group.\nGroup admins can turn it on with *' + P + 'economy on*'); }
     return;
   }
@@ -178,12 +185,17 @@ async function start() {
     
     getMessage: async () => undefined,
   });
+  { // outbound guard; sock.sendRaw is the unguarded original (only the ".bot" command and the group-promo status use it)
+    const rawSend = sock.sendMessage.bind(sock); sock.sendRaw = rawSend;
+    sock.sendMessage = (jid, content, opts) => (typeof jid === 'string' && jid.endsWith('@g.us') && !botOn(jid)) ? Promise.resolve(undefined) : rawSend(jid, content, opts);
+  }
   botState.sock = sock;
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('messages.upsert', u => onMessage(sock, u));
   sock.ev.on('groups.update', u => u.forEach(g => metaCache.delete(g.id)));
   sock.ev.on('group-participants.update', u => {
     metaCache.delete(u.id);
+    if (!botOn(u.id)) return; // bot is OFF in that group
     for (const h of botState.joinHooks || []) { try { h(sock, u); } catch (e) { console.error('join hook failed:', e?.message || e); } } // .intro (cmd-intro.js)
   });
   sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {

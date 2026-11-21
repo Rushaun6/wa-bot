@@ -32,8 +32,9 @@ module.exports = {
       try { baileys = require('@whiskeysockets/baileys'); } catch {}
       try { pkg = require('@whiskeysockets/baileys/package.json'); } catch {}
       const mode = process.env.GROUP_STATUS_API || (/itsliaaa/i.test(pkg.name || '') ? 'flag' : 'relay');
-      if (mode === 'flag') return (jid, text) => sock.sendMessage(jid, { text, groupStatus: true });
-      if (mode === 'wrap') return (jid, text) => sock.sendMessage(jid, { groupStatusMessage: { text } });
+      const send0 = (sock.sendRaw || sock.sendMessage).bind(sock); // unguarded: these groups are other people's, the bot is off there on purpose
+      if (mode === 'flag') return (jid, text) => send0(jid, { text, groupStatus: true });
+      if (mode === 'wrap') return (jid, text) => send0(jid, { groupStatusMessage: { text } });
       if (!baileys?.proto || typeof sock?.relayMessage !== 'function') return null;
       return async (jid, text) => {
         ensureProto(baileys.proto);
