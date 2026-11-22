@@ -65,6 +65,13 @@ async function handle(sock, msg) {
   let m = msg.message; m = m.ephemeralMessage?.message || m; m = m.viewOnceMessage?.message || m;
   const text = (m.conversation || m.extendedTextMessage?.text || m.imageMessage?.caption || m.videoMessage?.caption || '').trim();
   if (process.env.STATUS_DEBUG && msg.key.remoteJid.endsWith('@g.us') && !text) console.log('STATUS_DEBUG message keys:', Object.keys(m));
+  { // .inactive: remember when each member last sent ANYTHING (text, photo, voice note, sticker...) in groups that have it on (cmd-inactive.js)
+    const rj = msg.key.remoteJid, gi = rj.endsWith('@g.us') && !msg.key.fromMe ? db.data.groups[rj]?.inact : null;
+    if (gi?.on && botOn(rj) && !(m.protocolMessage || m.reactionMessage || m.senderKeyDistributionMessage)) {
+      const sj = nj(msg.key.participant || msg.participant || '');
+      if (sj) getMeta(sock, rj).then(meta => { (db.group(rj).act ||= {})[resolveNum(meta, sj)] = Date.now(); db.save(); }).catch(() => {});
+    }
+  }
   if (!text && !isStatusMsg(m)) return;
   const chat = msg.key.remoteJid, isGroup = chat.endsWith('@g.us'), fromMe = !!msg.key.fromMe;
   if (isGroup && !botOn(chat) && !BOT_SWITCH.test(text)) return; // the bot is OFF in this group (".bot on" by a group admin turns it on): it only hears ".bot ..."
