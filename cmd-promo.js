@@ -1,4 +1,4 @@
-// 📣 .promotegroupstatus (owner / bot admins): promote your group with a GROUP STATUS inside groups you have permission to post in.
+// 📣 .promotegroup (hidetag) and .promotegroupstatus (group status), owner / bot admins: promote your group with a GROUP STATUS inside groups you have permission to post in.
 // You queue invite links of those groups. For each one the bot joins (waiting for approval if the group needs it, with no time limit),
 // posts the status (your group link), leaves, and clears that chat from its own list. Progress is DM'd to whoever queued the link.
 // Joining is paced (one group per ~45s) so the number doesn't get flagged: that is not a cap, the queue can be any size.
@@ -52,9 +52,14 @@ module.exports = {
     async function work() {
       const sock = L.state.sock, s = st();
       if (!sock || busy || !s.queue.length) return;
-      const send = statusSender(sock); if (!send || !s.verified) return; // never join a group until posting is confirmed to work
+      const head = s.queue[0], kind = head.kind || 'status'; let send = null;
+      if (kind === 'hidetag') send = async (jid, text) => { // a normal message that silently mentions everybody (like .hidetag)
+        const md = await sock.groupMetadata(jid), ids = (md.participants || []).map(p => p.id), r = await (sock.sendRaw || sock.sendMessage).call(sock, jid, { text, mentions: ids });
+        return Object.assign({ key: r?.key, messageTimestamp: r?.messageTimestamp }, { _n: ids.length });
+      };
+      else { send = statusSender(sock); if (!send || !s.verified) { if (s.queue.some(i => (i.kind || 'status') === 'hidetag')) s.queue.push(s.queue.shift()); return; } } // never join a group for a status until posting is confirmed to work
       busy = true;
-      const item = s.queue[0], to = item.by || L.OWNERS[0];
+      const item = head, to = item.by || L.OWNERS[0];
       try {
         let info;
         try { info = await sock.groupGetInviteInfo(item.code); }
@@ -77,14 +82,22 @@ module.exports = {
         await sock.groupLeave(info.id).catch(e => console.error('promo: leave failed:', e?.message || e));
         if (sent?.key) await sock.chatModify({ delete: true, lastMessages: [{ key: sent.key, messageTimestamp: sent.messageTimestamp }] }, info.id).catch(() => {});
         s.queue.shift(); if (sent) s.done++; db.save();
-        dm(to, sent ? `✅ Promo posted in *${info.subject}*. Left and cleared the chat. (${s.queue.length} left in the queue)` : `❌ Promo failed in *${info.subject}* (${err || 'unknown error'}). I left the group. Re-queue it to try again.`);
+        dm(to, sent ? `✅ Promo ${kind === 'hidetag' ? `hidetag sent to ${sent._n ?? 'all'} members of` : 'posted in'} *${info.subject}*. Left and cleared the chat. (${s.queue.length} left in the queue)` : `❌ Promo failed in *${info.subject}* (${err || 'unknown error'}). I left the group. Re-queue it to try again.`);
       } catch (e) { console.error('promo worker failed:', e?.message || e); }
       finally { busy = false; }
     }
     setInterval(() => work(), TICK).unref();
     L.petTicks = Object.assign(L.petTicks || {}, { promoTick: work }); // so it can be run by hand / tested
 
-    def(['promotegroupstatus', 'pgs'], { ba: true, usage: ['promotegroupstatus test', 'promotegroupstatus <invite link(s)>', 'promotegroupstatus link <your group link>', 'promotegroupstatus text <message>', 'promotegroupstatus list', 'promotegroupstatus stop'] }, c => {
+    const HELP_TAG = `📣 *PROMOTE GROUP*
+
+Joins a group you have permission to promote in, sends a *hidetag* (a message that silently mentions every member) with your group link, then leaves.
+
+➜ ${P}promotegroup link <your group link>  (set once)
+➜ ${P}promotegroup <invite link> <invite link> …
+➜ ${P}promotegroup text <message>  (optional, {link} = your link)
+➜ ${P}promotegroup list · stop`;
+    const promoCmd = (c, kind) => {
       const s = st(), a = (c.args[0] || '').toLowerCase(), rest = c.args.slice(1).join(' ');
       if (a === 'link') {
         const l = (/https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9]+/.exec(rest) || [])[0];
@@ -101,11 +114,14 @@ module.exports = {
       if (a === 'stop' || a === 'clear') { const n = s.queue.length; s.queue = []; db.save(); return c.reply(`🛑 Promo queue cleared (${n} removed).`); }
       if (a === 'list' || a === 'status') return c.reply(`📣 *PROMO*\n\n🔗 Your link: ${s.link || '_not set_'}\n🔓 Unlocked: ${s.verified ? 'yes' : 'no (run test, then ok)'}\n✅ Posted so far: *${s.done}*\n⏳ Waiting: *${s.queue.length}*${s.queue.slice(0, 15).map(i => `\n• ${i.name || i.code.slice(0, 8) + '…'}${i.asked ? ' _(asked to join)_' : ''}`).join('')}\n\n_Preview:_\n${s.link ? body(s) : '_set your link first_'}`);
       const codes = [...new Set([...c.args.join(' ').matchAll(/chat\.whatsapp\.com\/([A-Za-z0-9]{10,})/g)].map(x => x[1]))];
+      if (!codes.length && kind === 'hidetag') return c.reply(HELP_TAG);
       if (!codes.length) return c.reply(`📣 *PROMO STATUS*\n\nPosts a group status with your group link inside groups you have permission to post in, then leaves.\n\n➜ ${P}promotegroupstatus link <your group link>\n➜ ${P}promotegroupstatus <invite link> <invite link> …\n➜ ${P}promotegroupstatus text <message>  (optional)\n➜ ${P}promotegroupstatus list · stop`);
       if (!s.link) return c.reply(`⚠️ Set your own group link first:\n${P}promotegroupstatus link https://chat.whatsapp.com/…`);
-      if (!s.verified) return c.reply(`🔒 Not unlocked yet. Run *${P}promotegroupstatus test* in one of your own groups first, check the status shows up, then send *${P}promotegroupstatus ok*.`);
-      let added = 0; for (const code of codes) if (!s.queue.some(i => i.code === code)) { s.queue.push({ code, by: c.sender, at: Date.now() }); added++; }
+      if (kind === 'status' && !s.verified) return c.reply(`🔒 Not unlocked yet. Run *${P}promotegroupstatus test* in one of your own groups first, check the status shows up, then send *${P}promotegroupstatus ok*.`);
+      let added = 0; for (const code of codes) if (!s.queue.some(i => i.code === code)) { s.queue.push({ code, by: c.sender, at: Date.now(), kind }); added++; }
       db.save(); c.reply(`📣 Queued *${added}* group${added === 1 ? '' : 's'}. I'll join (and wait for approval if needed), post, leave, and DM you after each one.\n⏳ ${s.queue.length} in the queue`);
-    });
+    };
+    def(['promotegroupstatus', 'pgs'], { ba: true, usage: ['promotegroupstatus test', 'promotegroupstatus <invite link(s)>', 'promotegroupstatus link <your group link>', 'promotegroupstatus text <message>', 'promotegroupstatus list', 'promotegroupstatus stop'] }, c => promoCmd(c, 'status'));
+    def(['promotegroup', 'grouppromote', 'joinpromote'], { ba: true, usage: ['promotegroup <invite link(s)>', 'promotegroup link <your group link>', 'promotegroup text <message>', 'promotegroup list', 'promotegroup stop'] }, c => promoCmd(c, 'hidetag'));
   },
 };
