@@ -300,22 +300,40 @@ async function sweepStale() { // temp folders left over from a crash
   try { for (const d of await fsp.readdir(os.tmpdir())) if (d.startsWith('wab-song-')) { const p = path.join(os.tmpdir(), d); const st = await fsp.stat(p).catch(() => null); if (st && Date.now() - st.mtimeMs > 3600000) await fsp.rm(p, { recursive: true, force: true }); } } catch {}
 }
 
-async function runJob(ctx, item, P, initialStatus = null) {
-  const { sock, chat, msg, sender } = ctx;
-  if (busyUsers.has(sender)) return ctx.reply('⏳ You already have a download running. Wait for it to finish.');
-  if (inFlight >= CFG.maxJobs + CFG.maxQueue) return ctx.reply(MSG.BUSY); // counted right away, so a burst of picks can't slip past the cap
+// Animated loading message: sends one message (no quote) and keeps editing it with a moon-phase emoji + dots.
+// finish(text) stops the animation and edits the same message into `text` (falls back to a new message if editing fails).
+const MOON = ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'];
+const LOAD_MS = Number(ENV.SONG_LOAD_FRAME_MS || 2500);
+async function startLoader(sock, chat, stage) {
+  let key = null, n = 0, timer = null, chain = Promise.resolve(true);
+  const frame = () => `${MOON[n % MOON.length]} ${stage}${'.'.repeat(n % 3 + 1)}`;
+  const edit = t => (chain = chain.then(() => sock.sendMessage(chat, { text: t, edit: key }).then(() => true, () => false)));
+  try { key = (await sock.sendMessage(chat, { text: frame() }))?.key || null; } catch {}
+  if (key) timer = setInterval(() => { n++; edit(frame()); }, LOAD_MS);
+  return {
+    stage(s) { stage = s; },
+    async finish(text) {
+      if (timer) { clearInterval(timer); timer = null; }
+      await chain;
+      if (key && await edit(text)) return;
+      await sock.sendMessage(chat, { text }).catch(() => {});
+    },
+  };
+}
+
+async function runJob(ctx, item, P, loader = null) {
+  const { sock, chat, sender } = ctx;
+  loader = loader || await startLoader(sock, chat, 'Getting your song');
+  if (busyUsers.has(sender)) return loader.finish('⏳ You already have a download running. Wait for it to finish.');
+  if (inFlight >= CFG.maxJobs + CFG.maxQueue) return loader.finish(MSG.BUSY); // counted right away, so a burst of picks can't slip past the cap
   busyUsers.add(sender); inFlight++;
   const ahead = inFlight - CFG.maxJobs; // above 0 = this one has to wait its turn
-  let acquired = false, dir = null, status = null, lastEdit = 0;
-  const edit = async (text, force) => {
-    const now = Date.now(); if (!status || (!force && now - lastEdit < 2500)) return; lastEdit = now;
-    await sock.sendMessage(chat, { text, edit: status.key }).catch(() => {});
-  };
+  let acquired = false, dir = null;
   const label = `*${item.title}* — ${item.artist}`;
   try {
-    status = initialStatus || await sock.sendMessage(chat, { text: ahead > 0 ? `⏳ Queued (position ${ahead}): ${label}` : `⏳ Preparing: ${label}` }, { quoted: msg });
-    await edit(ahead > 0 ? `⏳ Queued (position ${ahead}): ${label}` : `⏳ Preparing: ${label}`, true);
+    if (ahead > 0) loader.stage(`Waiting in line (position ${ahead})`);
     await acquire(); acquired = true;
+    loader.stage('Getting your song');
     dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wab-song-'));
     let src;
     if (item.file) src = item.file;
@@ -323,41 +341,29 @@ async function runJob(ctx, item, P, initialStatus = null) {
       src = path.join(dir, 'source.bin');
       let audioUrl = item.url;
       if (item.kind === 'knight-download') {
-        await edit(`🎧 Requesting the MP3 from KnightBot…\n${label}`, true);
+        loader.stage('Requesting the MP3');
         audioUrl = await resolveKnightAudio(item.url);
       }
-      await edit(`⬇️ Downloading: ${label}`, true);
-      await download(audioUrl, src, (got, total) => edit(total ? `⬇️ Downloading… *${Math.floor(got / total * 100)}%* (${fmtMB(got)} / ${fmtMB(total)})\n${label}` : `⬇️ Downloading… ${fmtMB(got)}\n${label}`));
+      loader.stage('Downloading');
+      await download(audioUrl, src, (got, total) => loader.stage(total ? `Downloading ${Math.floor(got / total * 100)}%` : 'Downloading'));
     }
-    await edit(`🎛️ Checking and tagging the audio…\n${label}`, true);
+    loader.stage('Checking the audio');
     const out = await prepareAudio(src, dir, item);
-    await edit(`📤 Sending (${fmtMB(out.size)})…\n${label}`, true);
+    loader.stage('Sending');
     const name = safeName(`${item.artist} - ${item.title}`) + '.mp3';
     const caption = `🎵 *${item.title}*\n👤 ${item.artist}\n⏱ ${fmtDur(out.seconds)} · 📀 ${item.source}${item.license ? ' · 📜 ' + item.license : ''}${item.link ? '\n🔗 ' + item.link : ''}`;
+    // Only the song itself is sent (no quoted reply, no caption on the file).
     if (out.asDocument) {
-      await sock.sendMessage(chat, {
-        document: { url: out.file },
-        mimetype: 'audio/mpeg',
-        fileName: name,
-        caption,
-      }, { quoted: msg });
+      await sock.sendMessage(chat, { document: { url: out.file }, mimetype: 'audio/mpeg', fileName: name });
     } else {
-      await sock.sendMessage(chat, {
-        audio: { url: out.file },
-        mimetype: 'audio/mpeg',
-        seconds: Math.round(out.seconds),
-        ptt: false,
-      }, { quoted: msg });
-      // WhatsApp audio-message payloads do not reliably support captions.
-      await sock.sendMessage(chat, { text: caption }, { quoted: msg });
+      await sock.sendMessage(chat, { audio: { url: out.file }, mimetype: 'audio/mpeg', seconds: Math.round(out.seconds), ptt: false });
     }
-    await edit(`✅ Sent *${item.title}* — ${item.artist} (${fmtMB(out.size)}).`, true);
+    // The loading message becomes the song info (same text format as before).
+    await loader.finish(caption);
   } catch (e) {
     const err = e instanceof SongError ? e : /ENOENT/.test(e?.message) ? new SongError('NO_FFMPEG') : netErr(e);
     console.error('song failed:', err.code, err.message);
-    const text = (MSG[err.code] || '⚠️ Something went wrong while getting that song. Try again.') + `\n\n${label}`;
-    const shown = status ? await sock.sendMessage(chat, { text, edit: status.key }).then(() => true, () => false) : false;
-    if (!shown) await ctx.reply(text).catch(() => {}); // the progress message could not be edited: send the error as a new message
+    await loader.finish((MSG[err.code] || '⚠️ Something went wrong while getting that song. Try again.') + `\n\n${label}`);
   } finally {
     if (acquired) release();
     inFlight--; busyUsers.delete(sender);
@@ -367,7 +373,7 @@ async function runJob(ctx, item, P, initialStatus = null) {
 
 module.exports = {
   category: '🎵 MUSIC',
-  _t: { CFG, SongError, MSG, fmtDur, download, prepareAudio, searchYouTube, resolveKnightAudio, runJob, busyUsers }, // for tests
+  _t: { CFG, startLoader, SongError, MSG, fmtDur, download, prepareAudio, searchYouTube, resolveKnightAudio, runJob, busyUsers }, // for tests
   register(def, L) {
     const { P } = L;
     sweepStale();
@@ -378,32 +384,21 @@ module.exports = {
       if (/https?:\/\/|www\./i.test(q)) return c.reply(`🔎 Enter a song name, not a video link.\n\nExample: *${P}song song name*`);
       if (L.cooldown(c, 'song', 4000)) return;
 
-      const status = await c.reply(`🔎 Searching YouTube for *${q}*...`);
-      const updateStatus = async text => {
-        if (status?.key) {
-          try {
-            await c.sock.sendMessage(c.chat, { text, edit: status.key });
-            return;
-          } catch {}
-        }
-        await c.reply(text);
-      };
+      // One animated loading message (no quote/reply). It is edited as the job moves along
+      // and finally turns into the song info; the audio is sent right after it.
+      const loader = await startLoader(c.sock, c.chat, 'Searching YouTube');
 
       try {
         const results = await withTimeout(searchYouTube(q), CFG.searchMs + 14000);
         const item = results[0];
-        if (!item) {
-          await updateStatus(`🔍 No YouTube result found for *${q}*. Try a different spelling.`);
-          return;
-        }
-        await updateStatus(`🎵 Found the closest YouTube match: *${item.title}* — ${item.artist}\n🎧 Requesting MP3...`);
-        // No numbered menu: immediately pass the first YouTube result to KnightBot.
-        runJob({ sock: c.sock, chat: c.chat, msg: c.msg, sender: c.sender, reply: c.reply }, item, P, status)
+        if (!item) return await loader.finish(`🔍 No YouTube result found for *${q}*. Try a different spelling.`);
+        loader.stage('Found it, grabbing the audio');
+        runJob({ sock: c.sock, chat: c.chat, msg: c.msg, sender: c.sender, reply: c.reply }, item, P, loader)
           .catch(e => console.error('song job crashed:', e?.message || e));
       } catch (e) {
         const err = e instanceof SongError ? e : netErr(e);
         console.error('song search failed:', err.code, err.message);
-        await updateStatus((MSG[err.code] || '⚠️ Could not search YouTube right now. Try again.') + `\n\n${q}`);
+        await loader.finish((MSG[err.code] || '⚠️ Could not search YouTube right now. Try again.') + `\n\n${q}`);
       }
     });
   },
