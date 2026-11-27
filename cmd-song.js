@@ -1,16 +1,7 @@
-// SONG: .song <name> searches for music, lists the results, and sends the full track as audio when the source allows downloading.
-//
-// WHERE THE AUDIO COMES FROM (only sources that permit downloads):
-//   My Library        MP3s you put in the music/ folder (yours, or ones you have rights to)   no setup
-//   Jamendo           Creative Commons music, official API, only tracks marked downloadable    JAMENDO_CLIENT_ID (free, devportal.jamendo.com)
-//   Internet Archive  only items that carry a Creative Commons / public domain license          no setup
-// LINK ONLY (the bot never downloads from these, it gives you the official link):
-//   YouTube           official Data API search (needs YOUTUBE_API_KEY); YouTube's terms don't allow downloading
-//   Audiomack         search link; downloads only exist through Audiomack's own app for tracks the artist enabled
-//
-// How it works: .song <name> shows numbered results. The person replies with the number (just "2" is enough, within 3 minutes).
-// Downloads run in the background (max 2 at once, 1 per person), report progress, are checked with ffmpeg
-// (valid audio, full length, ID3 title/artist added), and the temp files are always deleted.
+// SONG: .song <name> searches YouTube, selects the first result, requests its MP3 from KnightBot, and sends it.
+// YouTube search needs YOUTUBE_API_KEY. KnightBot defaults to the endpoint and parameters supplied by the user.
+// Downloads run in the background (max 2 at once, 1 per person), are checked with ffmpeg,
+// and temporary files are deleted after sending.
 const fs = require('fs'), fsp = require('fs/promises'), os = require('os'), path = require('path');
 const { spawn } = require('child_process');
 const { Readable, Transform } = require('stream');
@@ -27,19 +18,23 @@ const CFG = {
   ytBase: ENV.YT_BASE || 'https://www.googleapis.com/youtube/v3',
   jamendoId: ENV.JAMENDO_CLIENT_ID || '',
   ytKey: ENV.YOUTUBE_API_KEY || '',
+  knightBase: ENV.KNIGHTBOT_BASE || 'https://knightbotapi.stream/api/download/ytaudio',
+  knightKey: ENV.KNIGHTBOT_API_KEY || 'knight',
+  knightFormat: ENV.KNIGHTBOT_FORMAT || '128kbps',
   musicDir: ENV.MUSIC_DIR || path.join(process.cwd(), 'music'),
   searchMs: Number(ENV.SONG_SEARCH_TIMEOUT_MS || 12000),
   downloadMs: Number(ENV.SONG_DL_TIMEOUT_MS || 180000),   // whole download, 3 min
   maxDlBytes: Number(ENV.SONG_MAX_MB || 80) * MB,         // refuse to download more than this
   audioLimit: 15.5 * MB,                                  // WhatsApp plays audio messages up to ~16 MB, bigger goes as a document
   docLimit: Number(ENV.SONG_DOC_MAX_MB || 64) * MB,       // bigger than this is refused
-  maxJobs: Number(ENV.SONG_MAX_JOBS || 2), maxQueue: 5, pickTtl: 3 * 60000,
+  maxJobs: Number(ENV.SONG_MAX_JOBS || 2), maxQueue: 5,
 };
 const UA = 'Mozilla/5.0 (compatible; wa-bot-song/1.0)';
 
 class SongError extends Error { constructor(code, msg) { super(msg || code); this.code = code; } }
 const MSG = {
   TIMEOUT: '⏱️ The source took too long to respond. Try again in a minute.',
+  NO_YT_KEY: '⚙️ YouTube search is not configured. Add YOUTUBE_API_KEY to your bot environment.',
   NETWORK: '📡 Network error while reaching the source. Try again shortly.',
   UNAVAILABLE: '🚫 Download unavailable. The source did not return a usable audio file for this track.',
   UNAUTHORIZED: '🔒 The source did not authorize this download, so I will not send it.',
@@ -184,13 +179,104 @@ async function searchArchive(q) {
   });
   return out.slice(0, 4);
 }
-async function searchYouTube(q) { // official Data API: search only. Never downloads.
-  if (!CFG.ytKey) return [];
-  const s = await getJson(`${CFG.ytBase}/search?` + new URLSearchParams({ part: 'snippet', type: 'video', videoCategoryId: '10', maxResults: '3', q, key: CFG.ytKey }));
-  const items = (s.items || []).filter(i => i.id?.videoId); if (!items.length) return [];
-  const durs = {};
-  try { const v = await getJson(`${CFG.ytBase}/videos?` + new URLSearchParams({ part: 'contentDetails', id: items.map(i => i.id.videoId).join(','), key: CFG.ytKey })); for (const x of v.items || []) durs[x.id] = isoDur(x.contentDetails?.duration); } catch {}
-  return items.map(i => ({ source: 'YouTube', title: unent(i.snippet.title), artist: unent(i.snippet.channelTitle).replace(/ - Topic$/, ''), duration: durs[i.id.videoId] || null, kind: 'link', link: `https://www.youtube.com/watch?v=${i.id.videoId}` }));
+const YT_NOISE = new Set(['official', 'audio', 'video', 'music', 'lyrics', 'lyric', 'hd', '4k', 'full', 'visualizer', 'topic']);
+const YT_ALT_FORMATS = ['cover', 'karaoke', 'reaction', 'tutorial', 'slowed', 'sped up', 'nightcore', 'instrumental', 'bass boosted', '8d audio'];
+function normalizeYTText(value) {
+  return unent(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/&/g, ' and ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+function scoreYouTubeResult(query, item, position) {
+  const q = normalizeYTText(query);
+  const title = normalizeYTText(item.snippet?.title);
+  const channel = normalizeYTText(item.snippet?.channelTitle);
+  const queryTokens = [...new Set(q.split(/\s+/).filter(t => t.length > 1 && !YT_NOISE.has(t)))];
+  if (!queryTokens.length) return 100 - position;
+
+  const titleTokens = new Set(title.split(/\s+/));
+  const channelTokens = new Set(channel.split(/\s+/));
+  const titleHits = queryTokens.filter(t => titleTokens.has(t)).length;
+  const channelHits = queryTokens.filter(t => channelTokens.has(t)).length;
+  const titleCoverage = titleHits / queryTokens.length;
+  const channelCoverage = channelHits / queryTokens.length;
+  let score = titleCoverage * 72 + channelCoverage * 22;
+
+  // Exact phrase/title matches are strong signals, but tolerate official labels and punctuation.
+  if (q && title.includes(q)) score += 45;
+  if (queryTokens.length > 1) {
+    let adjacent = 0;
+    for (let n = 0; n < queryTokens.length - 1; n++) {
+      if (title.includes(`${queryTokens[n]} ${queryTokens[n + 1]}`)) adjacent++;
+    }
+    score += adjacent * 5;
+  }
+
+  // Prefer an artist's own YouTube Topic channel, without making it mandatory.
+  if (/\btopic\b/.test(channel)) score += 5;
+  const rawTitle = normalizeYTText(item.snippet?.title);
+  for (const marker of YT_ALT_FORMATS) {
+    if (rawTitle.includes(marker) && !q.includes(marker)) score -= 18;
+  }
+  // Preserve YouTube's relevance ordering as a small tie-breaker.
+  return score + Math.max(0, 9 - position) * 0.15;
+}
+
+async function searchYouTube(q) {
+  if (!CFG.ytKey) throw new SongError('NO_YT_KEY');
+  // Search several candidates, then rank by title/artist match instead of blindly downloading result #1.
+  const s = await getJson(`${CFG.ytBase}/search?` + new URLSearchParams({
+    part: 'snippet', type: 'video', maxResults: '10', order: 'relevance', relevanceLanguage: 'en',
+    regionCode: 'JM', q, key: CFG.ytKey,
+  }));
+  const candidates = (s.items || []).filter(x => x.id?.videoId && x.snippet?.title);
+  if (!candidates.length) return [];
+
+  // Fetch durations and region restrictions in one request, rather than making one request per result.
+  const ids = candidates.map(x => x.id.videoId).join(',');
+  let details = new Map();
+  try {
+    const v = await getJson(`${CFG.ytBase}/videos?` + new URLSearchParams({ part: 'contentDetails,status', id: ids, key: CFG.ytKey }));
+    details = new Map((v.items || []).map(x => [x.id, x]));
+  } catch {}
+
+  const ranked = candidates.map((item, position) => {
+    const detail = details.get(item.id.videoId);
+    const restriction = detail?.contentDetails?.regionRestriction;
+    const blockedInJamaica = restriction?.blocked?.includes('JM') ||
+      (Array.isArray(restriction?.allowed) && !restriction.allowed.includes('JM'));
+    return { item, detail, position, score: scoreYouTubeResult(q, item, position), blockedInJamaica };
+  }).filter(x => !x.blockedInJamaica)
+    .sort((a, b) => b.score - a.score || a.position - b.position);
+
+  const best = ranked[0];
+  if (!best || best.score < 8) return [];
+  const i = best.item, link = `https://www.youtube.com/watch?v=${i.id.videoId}`;
+  return [{
+    source: 'YouTube', title: unent(i.snippet.title),
+    artist: unent(i.snippet.channelTitle).replace(/ - Topic$/i, ''),
+    duration: isoDur(best.detail?.contentDetails?.duration),
+    kind: 'knight-download', url: link, link,
+  }];
+}
+
+// KnightBot receives the first YouTube search result URL and returns an MP3 URL.
+async function resolveKnightAudio(videoUrl) {
+  if (!CFG.knightKey) throw new SongError('UNAUTHORIZED');
+  let endpoint;
+  try {
+    endpoint = new URL(CFG.knightBase);
+    endpoint.search = new URLSearchParams({ apikey: CFG.knightKey, format: CFG.knightFormat, url: videoUrl }).toString();
+  } catch { throw new SongError('UNAVAILABLE'); }
+  const j = await getJson(endpoint.toString(), CFG.downloadMs);
+  const audioUrl = j?.success && Number(j?.status) === 200
+    ? (j.result?.download || j.result?.dl_url || j.result?.dl)
+    : null;
+  if (!audioUrl) throw new SongError('UNAVAILABLE', 'KnightBot did not return a download URL');
+  let parsed;
+  try { parsed = new URL(audioUrl); } catch { throw new SongError('UNAVAILABLE'); }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'knightbotapi.stream' || !parsed.pathname.startsWith('/files/')) {
+    throw new SongError('UNAVAILABLE', 'KnightBot returned an unexpected download host');
+  }
+  return audioUrl;
 }
 const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|opus|wav|flac)$/i;
 async function searchLocal(q) {
@@ -207,14 +293,14 @@ const SOURCES = [['My Library', searchLocal], ['Jamendo', searchJamendo], ['Inte
 const audiomackLink = q => 'https://audiomack.com/search?q=' + encodeURIComponent(q);
 
 // ---------- job queue ----------
-let running = 0, inFlight = 0; const waiting = [], busyUsers = new Set(), pending = new Map();
+let running = 0, inFlight = 0; const waiting = [], busyUsers = new Set();
 const acquire = () => running < CFG.maxJobs ? (running++, Promise.resolve()) : new Promise(r => waiting.push(r));
 const release = () => { const n = waiting.shift(); if (n) n(); else running--; };
 async function sweepStale() { // temp folders left over from a crash
   try { for (const d of await fsp.readdir(os.tmpdir())) if (d.startsWith('wab-song-')) { const p = path.join(os.tmpdir(), d); const st = await fsp.stat(p).catch(() => null); if (st && Date.now() - st.mtimeMs > 3600000) await fsp.rm(p, { recursive: true, force: true }); } } catch {}
 }
 
-async function runJob(ctx, item, P) {
+async function runJob(ctx, item, P, initialStatus = null) {
   const { sock, chat, msg, sender } = ctx;
   if (busyUsers.has(sender)) return ctx.reply('⏳ You already have a download running. Wait for it to finish.');
   if (inFlight >= CFG.maxJobs + CFG.maxQueue) return ctx.reply(MSG.BUSY); // counted right away, so a burst of picks can't slip past the cap
@@ -227,24 +313,45 @@ async function runJob(ctx, item, P) {
   };
   const label = `*${item.title}* — ${item.artist}`;
   try {
-    status = await sock.sendMessage(chat, { text: ahead > 0 ? `⏳ Queued (position ${ahead}): ${label}` : `⏳ Preparing: ${label}` }, { quoted: msg });
+    status = initialStatus || await sock.sendMessage(chat, { text: ahead > 0 ? `⏳ Queued (position ${ahead}): ${label}` : `⏳ Preparing: ${label}` }, { quoted: msg });
+    await edit(ahead > 0 ? `⏳ Queued (position ${ahead}): ${label}` : `⏳ Preparing: ${label}`, true);
     await acquire(); acquired = true;
     dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wab-song-'));
     let src;
     if (item.file) src = item.file;
     else {
       src = path.join(dir, 'source.bin');
+      let audioUrl = item.url;
+      if (item.kind === 'knight-download') {
+        await edit(`🎧 Requesting the MP3 from KnightBot…\n${label}`, true);
+        audioUrl = await resolveKnightAudio(item.url);
+      }
       await edit(`⬇️ Downloading: ${label}`, true);
-      await download(item.url, src, (got, total) => edit(total ? `⬇️ Downloading… *${Math.floor(got / total * 100)}%* (${fmtMB(got)} / ${fmtMB(total)})\n${label}` : `⬇️ Downloading… ${fmtMB(got)}\n${label}`));
+      await download(audioUrl, src, (got, total) => edit(total ? `⬇️ Downloading… *${Math.floor(got / total * 100)}%* (${fmtMB(got)} / ${fmtMB(total)})\n${label}` : `⬇️ Downloading… ${fmtMB(got)}\n${label}`));
     }
     await edit(`🎛️ Checking and tagging the audio…\n${label}`, true);
     const out = await prepareAudio(src, dir, item);
     await edit(`📤 Sending (${fmtMB(out.size)})…\n${label}`, true);
     const name = safeName(`${item.artist} - ${item.title}`) + '.mp3';
-    await sock.sendMessage(chat, out.asDocument
-      ? { document: { url: out.file }, mimetype: 'audio/mpeg', fileName: name }
-      : { audio: { url: out.file }, mimetype: 'audio/mpeg', seconds: Math.round(out.seconds), ptt: false }, { quoted: msg });
-    await edit(`✅ *${item.title}* — ${item.artist}\n⏱ ${fmtDur(out.seconds)} · 📀 ${item.source}${item.license ? ' · 📜 ' + item.license : ''}${item.link ? '\n🔗 ' + item.link : ''}`, true);
+    const caption = `🎵 *${item.title}*\n👤 ${item.artist}\n⏱ ${fmtDur(out.seconds)} · 📀 ${item.source}${item.license ? ' · 📜 ' + item.license : ''}${item.link ? '\n🔗 ' + item.link : ''}`;
+    if (out.asDocument) {
+      await sock.sendMessage(chat, {
+        document: { url: out.file },
+        mimetype: 'audio/mpeg',
+        fileName: name,
+        caption,
+      }, { quoted: msg });
+    } else {
+      await sock.sendMessage(chat, {
+        audio: { url: out.file },
+        mimetype: 'audio/mpeg',
+        seconds: Math.round(out.seconds),
+        ptt: false,
+      }, { quoted: msg });
+      // WhatsApp audio-message payloads do not reliably support captions.
+      await sock.sendMessage(chat, { text: caption }, { quoted: msg });
+    }
+    await edit(`✅ Sent *${item.title}* — ${item.artist} (${fmtMB(out.size)}).`, true);
   } catch (e) {
     const err = e instanceof SongError ? e : /ENOENT/.test(e?.message) ? new SongError('NO_FFMPEG') : netErr(e);
     console.error('song failed:', err.code, err.message);
@@ -260,50 +367,44 @@ async function runJob(ctx, item, P) {
 
 module.exports = {
   category: '🎵 MUSIC',
-  _t: { CFG, SongError, MSG, fmtDur, download, prepareAudio, searchArchive, searchJamendo, searchYouTube, searchLocal, runJob, pending, busyUsers }, // for tests
+  _t: { CFG, SongError, MSG, fmtDur, download, prepareAudio, searchYouTube, resolveKnightAudio, runJob, busyUsers }, // for tests
   register(def, L) {
     const { P } = L;
     sweepStale();
 
-    // index.js asks this so it loads group info (needed to identify the sender the same way .song did) only when a search is waiting
-    L.state.hasPick = chat => { for (const k of pending.keys()) if (k.startsWith(chat + ':')) return true; return false; };
-
-    // "2": the person picks a result. index.js calls this for plain numeric messages. Returns true if it used the message.
-    L.state.onNumberReply = async ctx => {
-      const key = ctx.chat + ':' + ctx.sender, p = pending.get(key);
-      if (!p) return false;
-      if (Date.now() - p.at > CFG.pickTtl) { pending.delete(key); return false; }
-      const n = Number(ctx.text);
-      if (!Number.isInteger(n) || n < 1 || n > p.results.length) { await ctx.reply(`🎵 Pick a number from 1 to ${p.results.length}.`); return true; }
-      pending.delete(key);
-      const item = p.results[n - 1];
-      if (item.kind !== 'download') {
-        await ctx.reply(`🔗 *${item.title}* — ${item.artist}\n📀 ${item.source}\n\nI can't send audio from ${item.source}: it doesn't offer downloads I'm allowed to use. Listen on the official page:\n${item.link}`);
-        return true;
-      }
-      runJob(ctx, item, P).catch(e => console.error('song job crashed:', e?.message || e)); // not awaited: the bot keeps answering other messages
-      return true;
-    };
-
     def(['song', 'music'], { usage: 'song <song name>' }, async c => {
       const q = c.args.join(' ').trim();
-      if (!q) {
-        const on = (ok, off) => ok ? '✅' : '⚪ ' + off;
-        return c.reply(`🎵 *SONG*\n\nUsage: *${P}song <song name>*\nThen reply with the result number.\n\n*Where audio can come from:*\n${on(true)} My Library (music/ folder)\n${on(CFG.jamendoId, 'Jamendo: needs JAMENDO_CLIENT_ID')} Jamendo (free Creative Commons music)\n${on(true)} Internet Archive (openly licensed only)\n\n*Link only (no downloads):*\n${on(CFG.ytKey, 'YouTube: needs YOUTUBE_API_KEY')} YouTube\n✅ Audiomack (search link)`);
-      }
-      if (/https?:\/\/|www\./i.test(q)) return c.reply(`🔗 I search by *song name*, not by link.\nPlatforms like YouTube, Spotify and Apple Music don't let me download their audio, so use their official app for those.\n\nTry: *${P}song <song name>*`);
+      if (!q) return c.reply(`🎵 *SONG*\n\nUsage: *${P}song <song name>*\n\nI search YouTube, choose the closest title/artist match, and send its MP3.`);
+      if (/https?:\/\/|www\./i.test(q)) return c.reply(`🔎 Enter a song name, not a video link.\n\nExample: *${P}song song name*`);
       if (L.cooldown(c, 'song', 4000)) return;
-      const settled = await Promise.allSettled(SOURCES.map(([, f]) => withTimeout(f(q), CFG.searchMs + 14000)));
-      const results = settled.flatMap(r => r.status === 'fulfilled' ? r.value : []).slice(0, 8);
-      const failed = settled.filter(r => r.status === 'rejected');
-      if (!results.length) {
-        const why = failed.length === SOURCES.filter(([n]) => n !== 'My Library').length && failed.length > 0 ? (failed.some(f => f.reason?.code === 'TIMEOUT') ? MSG.TIMEOUT : MSG.NETWORK) : '';
-        return c.reply(`🔍 *No songs found* for "${q}".\n${why ? '\n' + why + '\n' : ''}\nTry a different spelling, or search on Audiomack:\n${audiomackLink(q)}`);
+
+      const status = await c.reply(`🔎 Searching YouTube for *${q}*...`);
+      const updateStatus = async text => {
+        if (status?.key) {
+          try {
+            await c.sock.sendMessage(c.chat, { text, edit: status.key });
+            return;
+          } catch {}
+        }
+        await c.reply(text);
+      };
+
+      try {
+        const results = await withTimeout(searchYouTube(q), CFG.searchMs + 14000);
+        const item = results[0];
+        if (!item) {
+          await updateStatus(`🔍 No YouTube result found for *${q}*. Try a different spelling.`);
+          return;
+        }
+        await updateStatus(`🎵 Found the closest YouTube match: *${item.title}* — ${item.artist}\n🎧 Requesting MP3...`);
+        // No numbered menu: immediately pass the first YouTube result to KnightBot.
+        runJob({ sock: c.sock, chat: c.chat, msg: c.msg, sender: c.sender, reply: c.reply }, item, P, status)
+          .catch(e => console.error('song job crashed:', e?.message || e));
+      } catch (e) {
+        const err = e instanceof SongError ? e : netErr(e);
+        console.error('song search failed:', err.code, err.message);
+        await updateStatus((MSG[err.code] || '⚠️ Could not search YouTube right now. Try again.') + `\n\n${q}`);
       }
-      pending.set(c.chat + ':' + c.sender, { results, at: Date.now(), q });
-      if (pending.size > 500) for (const [k, v] of pending) if (Date.now() - v.at > CFG.pickTtl) pending.delete(k);
-      const lines = results.map((r, i) => `*${i + 1}.* ${r.title} — ${r.artist}\n⏱ Duration: ${fmtDur(r.duration)}\n📀 Source: ${r.source} · ${r.kind === 'download' ? '✅ Download' : '🔗 Link only'}`);
-      c.reply(`🎵 *SONG SEARCH*\n_${q}_\n\n${lines.join('\n\n')}\n\nReply with the result number to select it.\n\n🔎 More on Audiomack: ${audiomackLink(q)}`);
     });
   },
 };
