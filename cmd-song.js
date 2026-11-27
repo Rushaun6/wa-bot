@@ -17,7 +17,7 @@ const CFG = {
   archiveBase: ENV.ARCHIVE_BASE || 'https://archive.org',
   ytBase: ENV.YT_BASE || 'https://www.googleapis.com/youtube/v3',
   jamendoId: ENV.JAMENDO_CLIENT_ID || '',
-  ytKey: ENV.YOUTUBE_API_KEY || '',
+  ytKey: ENV.YOUTUBE_API_KEY || 'AIzaSyCLsfh5wpHbR_5ANFcZZ8wc9w42CBbl-2Q',
   knightBase: ENV.KNIGHTBOT_BASE || 'https://knightbotapi.stream/api/download/ytaudio',
   knightKey: ENV.KNIGHTBOT_API_KEY || 'knight',
   knightFormat: ENV.KNIGHTBOT_FORMAT || '128kbps',
