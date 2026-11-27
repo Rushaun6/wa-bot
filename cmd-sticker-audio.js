@@ -1,8 +1,8 @@
 // 🔊 .s : reply to a video (or send a video with ".s" as the caption) and the bot sends a native WhatsApp
 // SOUND STICKER: an animated sticker with the video's audio attached (speaker badge, tap to play).
 //
-//   .s            sound sticker, whole frame kept (transparent bars)     .s -audio  same thing (accepted)
-//   .s -crop      fill the square, cropping the edges                    .s -c      same
+//   .s            sound sticker, ZOOMED IN to fill the whole square (centre-cropped, no empty bars)
+//   .s -fit       keep the whole frame instead (transparent bars at the sides)     .s -audio  accepted, same as .s
 //   .s 5          only the first 5 seconds (1 to MAX_SECONDS)
 //   .s -clip      the OLD behaviour: a normal video message with sound (for people on old WhatsApp)
 //
@@ -48,15 +48,15 @@ function webpFilters(fps, crop) {
     : `scale=${SIZE}:${SIZE}:force_original_aspect_ratio=decrease:flags=lanczos`;
   // some static ffmpeg builds don't know the word "transparent", so try a few spellings of "fully transparent black"
   return (crop ? [''] : [',format=rgba,pad=SIZE:SIZE:(ow-iw)/2:(oh-ih)/2:color=black@0', ',format=rgba,pad=SIZE:SIZE:(ow-iw)/2:(oh-ih)/2:color=0x00000000'])
-    .map(pad => `${fit},fps=${fps}${pad.replace(/SIZE/g, SIZE)}${crop ? ',format=rgba' : ''}`);
+    .map(pad => `${fit}${fps ? ',fps=' + fps : ''}${pad.replace(/SIZE/g, SIZE)}${crop ? ',format=rgba' : ''}`);
 }
-async function makeWebp(bin, inFile, outFile, secs, crop) {
+async function makeWebp(bin, inFile, outFile, secs, crop, inArgs = [], still = false) { // still: input is one picture looped by inArgs (no fps filter, only quality steps down)
   let best = null, lastErr;
-  for (const { fps, q } of LADDER) {
+  for (const { fps, q } of (still ? LADDER.map(r => ({ ...r, fps: 0 })) : LADDER)) {
     let buf = null;
     for (const vf of webpFilters(fps, crop)) {
       try {
-        await ffmpeg(bin, ['-y', '-i', inFile, '-t', String(secs), '-an', '-vf', vf, '-c:v', 'libwebp', '-loop', '0',
+        await ffmpeg(bin, ['-y', ...inArgs, '-i', inFile, '-t', String(secs), '-an', '-vf', vf, '-c:v', 'libwebp', '-loop', '0',
           '-lossless', '0', '-quality', String(q), '-compression_level', '4', '-preset', 'default', outFile]);
         buf = fs.readFileSync(outFile); if (buf.length) break;
       } catch (e) { lastErr = e; }
@@ -135,6 +135,7 @@ async function sendSoundSticker(c, webp, ogg, seconds, ci) {
 // ---------- the command ----------
 module.exports = {
   category: '🎬 MEDIA',
+  _t: { ffmpeg, makeWebp, makeOgg, sendSoundSticker, hasAudio, durationOf, unwrap, MAX_SECONDS }, // reused by cmd-music-sticker.js
   register(def, L) {
     const { P, cooldown } = L;
     try { patchProto(require('@whiskeysockets/baileys').proto); } catch (e) { console.error('s: proto patch failed:', e?.message || e); }
@@ -156,12 +157,12 @@ module.exports = {
       if (!ffBin) return c.reply('⚠️ ffmpeg is not installed on the bot. Run `npm i ffmpeg-static` and redeploy.');
 
       const src = findSource(c);
-      if (!src) return c.reply(`⚠️ Reply to a *video* with *${P}s*, or send a video with *${P}s* as the caption.\n\nOptions: *${P}s -crop*, *${P}s 5* (seconds), *${P}s -clip* (plain video with sound)`);
+      if (!src) return c.reply(`⚠️ Reply to a *video* with *${P}s*, or send a video with *${P}s* as the caption.\n\nOptions: *${P}s -fit*, *${P}s 5* (seconds), *${P}s -clip* (plain video with sound)`);
       if ((src.media.seconds || 0) > MAX_INPUT_SECONDS) return c.reply(`⚠️ That video is too long (max ${MAX_INPUT_SECONDS / 60} minutes).`);
       if (Number(src.media.fileLength || 0) > MAX_INPUT_BYTES) return c.reply('⚠️ That video file is too big (max 50 MB).');
 
       const flags = c.args.map(a => a.toLowerCase());
-      const crop = flags.some(a => /^-{1,2}(c|crop)$/.test(a)), clip = flags.some(a => /^-{1,2}(clip|video)$/.test(a));
+      const crop = !flags.some(a => /^-{1,2}(f|fit)$/.test(a)), clip = flags.some(a => /^-{1,2}(clip|video)$/.test(a));
       const n = flags.map(a => /^\d+$/.test(a) ? +a : 0).find(Boolean);
       const secs = Math.min(MAX_SECONDS, Math.max(1, n || MAX_SECONDS));
       if (cooldown(c, 'sticker-audio', 15000)) return;
@@ -201,7 +202,7 @@ module.exports = {
       }
     }
 
-    def(['s'], { usage: ['s (reply to a video) - sound sticker', 's -crop | s 5 | s -clip'] }, run);
+    def(['s'], { usage: ['s (reply to a video) - sound sticker', 's -fit | s 5 | s -clip'] }, run);
   },
 };
 

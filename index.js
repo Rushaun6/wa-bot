@@ -125,6 +125,8 @@ async function handle(sock, msg) {
       }
       await reply(`🚫 *ANTILINK*\n\n@${sender} links are not allowed here.`, [senderJid]);
     }
+    if (!found && !db.data.banned.includes(sender)) // link hooks (cmd-autodl.js): TikTok / Instagram / Pinterest links, in groups AND private chats
+      for (const h of botState.linkHooks || []) Promise.resolve().then(() => h({ sock, msg, chat, isGroup, sender, fromMe, text })).catch(e => console.error('link hook failed:', e?.message || e));
     return;
   }
   if (!isOwner && db.data.banned.includes(sender)) return;
